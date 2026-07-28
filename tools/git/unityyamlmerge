@@ -1,0 +1,118 @@
+#!/usr/bin/env sh
+# Git merge driver wrapper for Unity's SmartMerge (UnityYAMLMerge).
+#
+# Called by git as:  sh tools/git/unityyamlmerge %O %B %A %A
+#                                                base theirs ours dest
+#
+# Why this wrapper exists
+# -----------------------
+# .gitattributes marks every Unity asset type (*.unity, *.prefab, *.asset,
+# *.mat, *.meta, ...) with `merge=unityyamlmerge`. If that driver is not
+# defined in a contributor's LOCAL git config, git does not fall back to a
+# text merge -- it aborts with:
+#
+#     fatal: custom merge driver unityyamlmerge lacks command line.
+#
+# Git config cannot be committed (by design: it can execute arbitrary
+# commands), so the driver has to be wired up per clone. This wrapper makes
+# that wiring portable: it is committed to the repo, resolves the Unity
+# install itself, and degrades to a normal text conflict instead of a fatal
+# error when Unity is not installed.
+#
+# Resolution order:
+#   1. $UNITY_YAML_MERGE                        (explicit override)
+#   2. editor matching ProjectSettings/ProjectVersion.txt
+#   3. newest editor found under a known Hub root
+#   4. no tool  ->  git merge-file (ordinary conflict markers, exit 1)
+#
+# Deliberately does NOT shell out to the `unity` CLI: as of CLI 1.0.0-beta.3
+# several subcommands print their result and then fail to exit, which would
+# hang git indefinitely mid-merge.
+
+set -u
+
+# `--probe` reports which tool would be used and exits. Used by setup.sh and
+# handy for debugging a contributor's machine. Must be handled before the
+# positional args are read, since probing passes no merge arguments.
+PROBE=0
+if [ "${1:-}" = "--probe" ]; then
+    PROBE=1
+else
+    BASE=$1
+    THEIRS=$2
+    OURS=$3
+    DEST=${4:-$3}
+fi
+
+find_merge_tool() {
+    if [ -n "${UNITY_YAML_MERGE:-}" ] && [ -x "${UNITY_YAML_MERGE}" ]; then
+        printf '%s' "${UNITY_YAML_MERGE}"
+        return 0
+    fi
+
+    _ver=""
+    if [ -f ProjectSettings/ProjectVersion.txt ]; then
+        _ver=$(sed -n 's/^m_EditorVersion: *//p' ProjectSettings/ProjectVersion.txt | tr -d '\r')
+    fi
+
+    for _root in \
+        "/c/Program Files/Unity/Hub/Editor" \
+        "/c/Program Files (x86)/Unity/Hub/Editor" \
+        "${HOME}/Unity/Hub/Editor" \
+        "/Applications/Unity/Hub/Editor" \
+        "/opt/unity/Hub/Editor"
+    do
+        [ -d "${_root}" ] || continue
+
+        # Exact project version first, then newest installed as a fallback.
+        _newest=$(ls -1d "${_root}"/* 2>/dev/null | sort -V | tail -1)
+        for _editor in "${_root}/${_ver}" "${_newest}"; do
+            [ -n "${_editor}" ] && [ -d "${_editor}" ] || continue
+            for _rel in \
+                "Editor/Data/Tools/UnityYAMLMerge.exe" \
+                "Editor/Data/Tools/UnityYAMLMerge" \
+                "Unity.app/Contents/Tools/UnityYAMLMerge"
+            do
+                if [ -x "${_editor}/${_rel}" ]; then
+                    printf '%s' "${_editor}/${_rel}"
+                    return 0
+                fi
+            done
+        done
+    done
+
+    return 1
+}
+
+TOOL=$(find_merge_tool) || TOOL=""
+
+if [ "${PROBE}" -eq 1 ]; then
+    if [ -n "${TOOL}" ]; then
+        echo "UnityYAMLMerge found: ${TOOL}"
+        exit 0
+    fi
+    echo "UnityYAMLMerge not found - merges will fall back to plain text conflicts." >&2
+    exit 1
+fi
+
+if [ -n "${TOOL}" ]; then
+    "${TOOL}" merge -p --force "${BASE}" "${THEIRS}" "${OURS}" "${DEST}"
+    exit $?
+fi
+
+# ---- Fallback -------------------------------------------------------------
+# No Unity install found. Produce an ordinary text merge so the contributor
+# gets conflict markers they can resolve by hand, rather than a fatal error
+# that blocks the merge entirely.
+echo "unityyamlmerge: UnityYAMLMerge not found - falling back to a plain text merge." >&2
+echo "                Scene/prefab conflicts will need manual resolution." >&2
+echo "                Set UNITY_YAML_MERGE=/path/to/UnityYAMLMerge to enable smart merging." >&2
+
+git merge-file -L ours -L base -L theirs "${OURS}" "${BASE}" "${THEIRS}"
+rc=$?
+
+if [ "${DEST}" != "${OURS}" ]; then
+    cp "${OURS}" "${DEST}"
+fi
+
+exit ${rc}
