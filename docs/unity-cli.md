@@ -70,7 +70,8 @@ unity install 6000.5.5f1 -a x86_64 \
   NDK/SDK/OpenJDK/cmake automatically and correctly).
 - Default install path is `C:\Program Files\Unity\Hub\Editor` — a protected
   path, so **Windows shows a UAC prompt that blocks the install silently until
-  accepted**. Change it with `unity editors install-path`.
+  accepted**. Change it with `unity install-path` (top-level, *not*
+  `unity editors install-path` — see the note on hidden subcommands below).
 - Budget disk: editor + those three module sets is ~23 GB.
 
 Verify:
@@ -150,6 +151,19 @@ appearing to work.
 - **Don't call it from latency-sensitive paths.** `tools/git/unityyamlmerge`
   deliberately probes the filesystem instead of calling `unity editors path`,
   because a CLI that doesn't return would hang git mid-merge.
+- **`--help` hides subcommands, so don't infer the tree from it.**
+  `unity editors --help` prints `Usage: unity editors|e [options] [command]`
+  and then lists only flags — no `Commands:` section. But `unity editors
+  running`, `unity editors info <version>` and `unity editors path <version>`
+  all exist and work. The subcommands are real and undocumented by their own
+  help.
+
+  This is worth more than a curiosity, because it makes guessing actively
+  dangerous. `install-path` is **top-level** (`unity install-path`, alias
+  `ip`) even though its obvious siblings live under `editors`. With no
+  subcommand listing to check against, `unity editors install-path` looks
+  entirely reasonable and is wrong. Verify against `unity --help` for
+  top-level commands, and against a real invocation for anything nested.
 
 ## Verifying your work
 

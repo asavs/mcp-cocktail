@@ -74,7 +74,18 @@ in [docs/unity-cli.md](docs/unity-cli.md) and
 
 - Editors land in `C:\Program Files\Unity\Hub\Editor\<version>` (protected
   path → **UAC prompt**, which blocks silently until accepted). Change with
-  `unity editors install-path`.
+  `unity install-path`.
+
+- **`[feedback]` `unity editors --help` lists no subcommands, but has three.**
+  It prints `Usage: unity editors|e [options] [command]` and then only flags —
+  no `Commands:` section. Yet `unity editors running`, `unity editors info
+  <version>` and `unity editors path <version>` all work. Anything nested has
+  to be discovered by trying it.
+
+  Caught this the expensive way: `install-path` is top-level (`unity
+  install-path`, alias `ip`) while its obvious siblings sit under `editors`,
+  so `unity editors install-path` reads as correct and isn't. With no
+  subcommand listing to check against there was nothing to catch it.
 
 ### Reliability / ergonomics
 
