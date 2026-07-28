@@ -146,16 +146,37 @@ if [ -n "${TOOL}" ]; then
     # firing on any wslpath-having environment: Unity also ships a native
     # Linux Editor, and a Linux ELF binary found by find_merge_tool() while
     # running inside WSL already gets native paths and needs no translation.
+    # Translate for the tool only. BASE/THEIRS/OURS/DEST stay POSIX because
+    # the recovery path below hands them to `git merge-file` and `cp`, which
+    # want WSL-side paths even when the Windows binary wants converted ones.
+    T_BASE=${BASE}
+    T_THEIRS=${THEIRS}
+    T_OURS=${OURS}
+    T_DEST=${DEST}
     case "${TOOL}" in
         *.exe|*.EXE)
             if command -v wslpath >/dev/null 2>&1; then
-                _wbase=$(wslpath -m "${BASE}" 2>/dev/null) && BASE=${_wbase}
-                _wtheirs=$(wslpath -m "${THEIRS}" 2>/dev/null) && THEIRS=${_wtheirs}
-                _wours=$(wslpath -m "${OURS}" 2>/dev/null) && OURS=${_wours}
-                _wdest=$(wslpath -m "${DEST}" 2>/dev/null) && DEST=${_wdest}
+                _w=$(wslpath -m "${BASE}" 2>/dev/null) && T_BASE=${_w}
+                _w=$(wslpath -m "${THEIRS}" 2>/dev/null) && T_THEIRS=${_w}
+                _w=$(wslpath -m "${OURS}" 2>/dev/null) && T_OURS=${_w}
+                _w=$(wslpath -m "${DEST}" 2>/dev/null) && T_DEST=${_w}
             fi
             ;;
     esac
+
+    # Snapshot our side before the tool runs. On a genuine conflict with
+    # --fallback none, UnityYAMLMerge writes the *other* side into DEST and
+    # exits 2 -- and in driver mode DEST is %A, our own content. Git then
+    # marks the path conflicted with only their version in it, so anyone
+    # resolving by keeping the file loses their work and never sees a marker
+    # saying so. Verified: same-field conflict leaves ZZOURSZZ absent and
+    # ZZTHEIRSZZ present. Keep a copy so that is recoverable.
+    _snap=""
+    if _snap=$(mktemp 2>/dev/null); then
+        cp "${OURS}" "${_snap}" 2>/dev/null || _snap=""
+    else
+        _snap=""
+    fi
 
     # `-h` only covers errors raised once `merge` has been accepted. Anything
     # that fails earlier -- in argument parsing -- still raises a modal dialog
@@ -173,20 +194,35 @@ if [ -n "${TOOL}" ]; then
     if command -v timeout >/dev/null 2>&1; then
         timeout "${UNITY_YAML_MERGE_TIMEOUT:-300}" \
             "${TOOL}" merge -h -p --force --fallback none \
-            "${BASE}" "${THEIRS}" "${OURS}" "${DEST}"
+            "${T_BASE}" "${T_THEIRS}" "${T_OURS}" "${T_DEST}"
         rc=$?
-        if [ "${rc}" -eq 124 ]; then
-            echo "unityyamlmerge: UnityYAMLMerge did not return within ${UNITY_YAML_MERGE_TIMEOUT:-300}s and was killed." >&2
-            echo "                It may have been waiting on a dialog. Treating this as a" >&2
-            echo "                conflict; resolve ${DEST} by hand." >&2
-            echo "                Set UNITY_YAML_MERGE_TIMEOUT to change the limit." >&2
-        fi
-        exit "${rc}"
+    else
+        "${TOOL}" merge -h -p --force --fallback none \
+            "${T_BASE}" "${T_THEIRS}" "${T_OURS}" "${T_DEST}"
+        rc=$?
     fi
 
-    "${TOOL}" merge -h -p --force --fallback none \
-        "${BASE}" "${THEIRS}" "${OURS}" "${DEST}"
-    exit $?
+    if [ "${rc}" -eq 124 ]; then
+        echo "unityyamlmerge: UnityYAMLMerge did not return within ${UNITY_YAML_MERGE_TIMEOUT:-300}s and was killed." >&2
+        echo "                It may have been waiting on a dialog." >&2
+        echo "                Set UNITY_YAML_MERGE_TIMEOUT to change the limit." >&2
+    fi
+
+    # SmartMerge could not resolve this one. Put our side back and produce an
+    # ordinary text merge, so the conflict arrives as markers showing both
+    # versions rather than as a file that quietly contains only theirs.
+    # Exits non-zero either way, so git still marks the path conflicted.
+    if [ "${rc}" -ne 0 ] && [ -n "${_snap}" ]; then
+        cp "${_snap}" "${DEST}"
+        git merge-file -L ours -L base -L theirs \
+            "${DEST}" "${BASE}" "${THEIRS}" >/dev/null 2>&1
+        echo "unityyamlmerge: SmartMerge could not resolve this file; fell back to a" >&2
+        echo "                text merge. Both sides are present as conflict markers." >&2
+        echo "                Resolve ${DEST} by hand." >&2
+    fi
+
+    [ -n "${_snap}" ] && rm -f "${_snap}"
+    exit "${rc}"
 fi
 
 # ---- Fallback -------------------------------------------------------------
