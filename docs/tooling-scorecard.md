@@ -31,9 +31,7 @@ the picture, and cite the trial.
 | Invoking Editor menu items | **B** | — | Medium | T-000; `menu` executed and listed all 873 items |
 | Editor lifecycle (quit, play mode) | **B** | — | Low | T-000; `File/Exit` worked but errored on response as the server died |
 | Scripted / repeatable setup | **A** | — | Medium | T-000; every CLI step was reproducible, GUI steps were not |
-| GameObject authoring | **B** | — | Medium | T-001; C reported success on a property it did not set |
-| Prefab authoring | ? | — | None | **Untested** |
-| Setting component properties | **B** | C's `manage_gameobject` | Medium | T-001; use C's `manage_components`, never its create-time `component_properties` |
+| GameObject / prefab authoring | ? | — | None | **Untested** |
 | Script creation + attach + recompile | ? | — | None | **Untested** |
 | Builds and test runs | ? | — | None | **Untested** — A and B both offer it |
 | Asset import / settings changes | ? | — | None | **Untested** |
@@ -49,13 +47,6 @@ Short version, with the detail living elsewhere — this file is for verdicts,
 
 - **A fails quietly** — returns confident wrong answers rather than errors.
   [Detail](unity-cli.md#scripting-the-cli).
-- **C fails quietly too, and this is the main reason to prefer B.** In T-001 it
-  returned `"success": true` for a call that applied three of four requested
-  changes. An agent that trusts response messages builds a wrong scene and
-  reports it as done. Verify C's mutations with a separate read.
-- **B's responses are self-verifying** — mutating calls echo the resulting
-  state, so the confirmation costs no extra call. C returns an acknowledgement
-  without the state.
 - **B has the better safety model** (`confirm=true`, `dry_run`, path
   confinement) — and ships `eval`/`eval_file`, which bypass all of it.
   [Detail](unity-mcp.md#security-notes).
@@ -137,75 +128,6 @@ authoring trial is for.
 ## Trials
 
 Newest first. Template at the bottom.
-
-### T-001 — build the same GameObject hierarchy through each arm
-
-**Date** 2026-07-28 · **Category** authoring · **Mutating** yes ·
-**Versions** CLI `1.0.0-beta.3`, Editor `6000.5.5f1`, Pipeline `0.4.0-exp.1`,
-MCP for Unity `v10.0.0` (server `3.4.5`)
-
-> **Protocol deviation — read the columns accordingly.** The protocol requires
-> one blind subagent per arm ([why](tooling-experiment.md#blind-the-arms)). This
-> ran as a single agent driving both arms with full knowledge of the
-> comparison, which makes it performer and grader at once. The outcome column
-> is unaffected — "the value read back as `(1,1,1)`" is a state read, not a
-> judgement. **Steps** and **Friction** are weakened: each arm's path was chosen
-> by someone who had already read both schemas, so neither count reflects what
-> an arm costs an agent meeting it cold. Re-run blind before treating those two
-> columns as evidence.
-
-**Task** Create a root empty `T001-<arm>`, containing a child empty at local
-position `(1, 2, 3)` carrying a `BoxCollider` with `size` `(2, 2, 2)`.
-**Done when** An independent read shows both trees with the correct parenting,
-position and collider size. Run in an untitled scratch scene; delete both trees
-afterwards and leave the scene unsaved.
-
-| Arm | Outcome | Steps | Friction | Verifiable? |
-|---|---|---|---|---|
-| A CLI | N/A | — | No live-scene access at all — structural, not a failure | — |
-| B MCP official | completed | 5 | None. No errors, no retries | Yes — the mutating call echoed the full property map back |
-| C MCP CoplayDev | completed after repair | 3 | `component_properties` on `create` silently did nothing; needed `manage_components` to actually set it | No — `"success": true` on the call that didn't work |
-
-**The result that matters.** C's create call passed `component_properties`,
-returned `"success": true` and `"GameObject 'T001-C-Child' created
-successfully"`, and left the collider at its default `(1,1,1)`. Parenting,
-position and component-add all worked; only the property was dropped, with no
-error, no warning, and a success message covering the whole call. It was caught
-only by reading the component back through B. C's dedicated
-`manage_components` / `set_property` then set it correctly on the first try.
-
-The likely mechanism, `[inferred, not confirmed]`: `manage_gameobject`'s own
-description says it is *"NOT for component management — use the
-manage_components tool"*, yet it still accepts `components_to_add` and
-`component_properties`. It appears to honour the first and ignore the second
-while reporting on neither.
-
-**Step count went to C, and it doesn't matter** — 3 against 5, and it would
-have been 2 if the property had applied. Fewer calls are worth little when one
-of them lies about what it did. The 5-call arm needed no verification pass; the
-3-call arm needed a verification pass and a repair, which is 5 either way, and
-only because the discrepancy was checked at all.
-
-**Also observed** — the two arms want different property vocabularies for the
-same field, and each rejects nothing: B takes the serialized name (`m_Size`),
-C takes the C# API name (`size`). Both worked within their own arm. Expect no
-transferability when moving a snippet between them.
-
-**Verdict** — **B for authoring.** Not on ergonomics, on truthfulness. C is
-usable if every mutation is followed by an independent read, which erases its
-call-count advantage.
-
-**Matrix changes** — added *GameObject authoring* (B) and *Setting component
-properties* (B); split prefab authoring out, still untested. Added the
-quiet-failure and self-verifying observations.
-
-**Follow-ups**
-- Does C drop properties on other paths, or is this specific to
-  `manage_gameobject` + `create`? A one-call check on `manage_material` or
-  `manage_scriptable_object` would establish the scope.
-- Worth reporting upstream — a dispatcher that accepts an argument it ignores
-  and reports success is a bug, not a design choice.
-- Prefab authoring, the remaining `?` in that group.
 
 ### T-000 — initial setup of CLI, both MCP servers, and the git merge driver
 
