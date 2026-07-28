@@ -112,7 +112,27 @@ if [ "${PROBE}" -eq 1 ]; then
 fi
 
 if [ -n "${TOOL}" ]; then
-    "${TOOL}" merge -p --force "${BASE}" "${THEIRS}" "${OURS}" "${DEST}"
+    # -h and --fallback none are what keep this usable as a merge driver. Both
+    # close a path where UnityYAMLMerge blocks on a GUI and takes git with it:
+    #
+    #   -h              headless. Without it, a file it cannot parse raises a
+    #                   modal "not a valid text serialized YAML file" dialog and
+    #                   the process sits there until someone clicks OK. During
+    #                   `git merge` that is an indefinite hang, and in CI there
+    #                   is nobody to click. With -h the same message goes to
+    #                   stderr and it exits 1, which git handles as a conflict.
+    #
+    #   --fallback none the shipped mergespecfile.txt lists GUI tools to hand
+    #                   unresolved conflicts to -- Beyond Compare, p4merge,
+    #                   Araxis (with /wait), PlasticSCM, DiffMerge, FileMerge.
+    #                   Whichever is installed gets launched, so merge behaviour
+    #                   would otherwise depend on what a contributor happens to
+    #                   have on their machine, and any of them blocks the merge.
+    #
+    # Someone who wants interactive resolution should configure a git mergetool
+    # directly rather than have one appear mid-merge.
+    "${TOOL}" merge -h -p --force --fallback none \
+        "${BASE}" "${THEIRS}" "${OURS}" "${DEST}"
     exit $?
 fi
 

@@ -154,6 +154,25 @@ See issue #1 for the full write-up. Key findings:
   scene-shaped fixture fails with `Could not determine the transform parent of
   <id>` and won't merge. Test against a real scene copied from the project.
 
+- **`[feedback]` UnityYAMLMerge blocks on a GUI in two different ways, and
+  both hang git.** Pass `-h --fallback none` for any non-interactive use.
+  1. Given a file it can't parse it raises a **modal error dialog** ("File is
+     not a valid text serialized YAML file") and waits. Observed as a live
+     `UnityYAMLMerge.exe` sitting on `MainWindowTitle: UnityYAMLMerge Error`
+     with its caller stuck behind it. `-h` ("headless mode, no error dialogs")
+     turns this into the same message on stderr plus exit 1 — verified.
+  2. The shipped `Editor/Data/Tools/mergespecfile.txt` hands unresolved
+     conflicts to whichever **GUI merge tool** it finds: Beyond Compare,
+     p4merge, Araxis (invoked with `/wait`), PlasticSCM, SourceGear DiffMerge,
+     Apple FileMerge. So merge behaviour depends on what a contributor happens
+     to have installed, and any of them blocks the merge. `--fallback none`
+     disables it.
+
+  Neither flag is on by default and neither appears in Unity's merge-driver
+  documentation. `-h` is only discoverable by running the tool with no
+  arguments. Confirmed that both flags together still merge a real scene
+  correctly — two independent edits, both preserved, object count unchanged.
+
 - **PowerShell mangles `git config` values containing spaces + embedded
   quotes** — `driver = C:/Program Files/...` silently truncated to
   `C:/Program`. Use the 8.3 short path (`C:/PROGRA~1/...`) or write
