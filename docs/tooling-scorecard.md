@@ -31,7 +31,8 @@ the picture, and cite the trial.
 | Invoking Editor menu items | **B** | — | Medium | T-000; `menu` executed and listed all 873 items |
 | Editor lifecycle (quit, play mode) | **B** | — | Low | T-000; `File/Exit` worked but errored on response as the server died |
 | Scripted / repeatable setup | **A** | — | Medium | T-000; every CLI step was reproducible, GUI steps were not |
-| GameObject / prefab authoring | ? | — | None | **Untested** |
+| GameObject authoring | **B** or **C** | — | Medium | T-001; both correct, no winner — see the failure modes |
+| Prefab authoring | ? | — | None | **Untested** |
 | Script creation + attach + recompile | ? | — | None | **Untested** |
 | Builds and test runs | ? | — | None | **Untested** — A and B both offer it |
 | Asset import / settings changes | ? | — | None | **Untested** |
@@ -47,6 +48,12 @@ Short version, with the detail living elsewhere — this file is for verdicts,
 
 - **A fails quietly** — returns confident wrong answers rather than errors.
   [Detail](unity-cli.md#scripting-the-cli).
+- **B's mutating calls echo the resulting state; C's don't.** Confirmation is
+  free on B and a deliberate extra read on C, whose `set_property` returns only
+  an instance id. Read state back on C. T-001.
+- **Neither server's own object handles are wholly trustworthy — in opposite
+  ways.** B repeats one `instanceId` across distinct objects (use
+  `hierarchyPath`); C's ids were distinct and reliable. T-001.
 - **B has the better safety model** (`confirm=true`, `dry_run`, path
   confinement) — and ships `eval`/`eval_file`, which bypass all of it.
   [Detail](unity-mcp.md#security-notes).
@@ -128,6 +135,89 @@ authoring trial is for.
 ## Trials
 
 Newest first. Template at the bottom.
+
+### T-001 — build the same GameObject hierarchy through each arm
+
+**Date** 2026-07-28 · **Category** authoring · **Mutating** yes ·
+**Versions** CLI `1.0.0-beta.3`, Editor `6000.5.5f1`, Pipeline `0.4.0-exp.1`,
+MCP for Unity `v10.0.0` (server `3.4.5`)
+
+Run blind and serial, one subagent per arm on the same model, each writing its
+own account before any comparison: [arm-b.md](trials/T-001/arm-b.md) ·
+[arm-c.md](trials/T-001/arm-c.md).
+
+**Task** Create a root empty `T001-Root`, containing a child empty at local
+position `(1, 2, 3)` carrying a `BoxCollider` with `size` `(2, 2, 2)`.
+**Done when** The state is read back and confirmed, not assumed. Untitled
+scratch scene; deleted afterwards, never saved.
+
+| Arm | Outcome | Steps | Friction | Verifiable? |
+|---|---|---|---|---|
+| A CLI | N/A | — | No live-scene access — structural | — |
+| B MCP official | completed | 12 | `size` rejected; needed a read to discover `m_Size` | Yes — and mutating calls echo the resulting state |
+| C MCP CoplayDev | completed | 9 | None on the path taken | Yes, via `mcpforunity://` resources — but `set_property` echoes nothing |
+
+**Both arms produced correct scenes.** Verified independently after each run:
+`m_Size [2,2,2]`, `m_LocalPosition [1,2,3]`, correct parenting. This category
+does not separate them on outcome, and the step counts are too close — and too
+dependent on which path an agent picks — to carry a verdict.
+
+What the trial did separate is **how each one fails**, and they fail in
+opposite directions.
+
+**B fails loudly.** Its one stumble was rejecting `size` with
+`Component 'BoxCollider' has no serialized property 'size'` — a 400 naming the
+exact problem. `size` is the public C# property every Unity doc page shows;
+the tool wants the serialized `m_Size`. That cost a failed call and a
+discovery read, and it is the good kind of friction: the arm said what was
+wrong and the fix was immediate.
+
+**C did not stumble at all here** — but has a path that fails silently. Probed
+separately, `manage_gameobject action=create` with `component_properties`
+returns `"success": true`, adds the component, and leaves the property at its
+default. Reproduced twice. The arm-C agent never hit it because it used
+`manage_components`, which the dispatcher's own description tells you to do
+(*"NOT for component management"*). So: real defect, on a path the tool warns
+against, reachable by anyone who takes the obvious shortcut of setting
+properties at creation time. `[reproduced, not reported upstream]`
+
+**Each arm has a handle trap, and they are mirror images.** B returned the
+*same* `instanceId` for genuinely different objects — `Main Camera` and
+`Directional Light` share one, and both created objects shared another.
+`hierarchyPath` is unambiguous and worked throughout, so B's own numeric
+handles are the unreliable part of its response. C's `instanceID` values were
+distinct and usable as handles for every subsequent call.
+`[B's duplicate instanceId: confirmed independently, cause unknown]`
+
+**Verification asymmetry, which is the practically useful finding.** B's
+mutating calls echo the resulting state, so confirmation is free. C's
+`set_property` returns only `{"instanceID": ...}` — no value — so a C agent
+that doesn't deliberately re-read has no signal at all that a write landed.
+Both arms *can* self-verify; only one makes it the default.
+
+**Also settled** — `position` on C's `create` is **local** when a `parent` is
+given. The arm-C report correctly declined to conclude this, since its root
+sat at the origin where local and world coincide. Re-run with the root at
+`(10,0,0)`: child at local `(1,2,3)`, world `(11,2,3)`.
+
+**Verdict** — **no winner for authoring.** Both express the task cleanly and
+both got it right. Prefer B when you want failures that announce themselves;
+prefer C for a slightly leaner call sequence. Either way, read the state back:
+B because a wrong property name is a live risk, C because a write can vanish
+without complaint.
+
+**Matrix changes** — *GameObject authoring* filled as "B or C", Medium,
+citing this trial. Added the verification-asymmetry and instanceId
+observations.
+
+**Follow-ups**
+- Report C's `component_properties` drop upstream — accepting an argument,
+  ignoring it, and returning success is a bug on any reading.
+- Does the drop affect other C dispatchers that take properties inline
+  (`manage_material`, `manage_scriptable_object`)?
+- What causes B's duplicate `instanceId`? Harmless here only because
+  `hierarchyPath` exists.
+- Prefab authoring and script-create-attach-recompile, still untested.
 
 ### T-000 — initial setup of CLI, both MCP servers, and the git merge driver
 
