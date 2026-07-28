@@ -173,6 +173,18 @@ See issue #1 for the full write-up. Key findings:
   arguments. Confirmed that both flags together still merge a real scene
   correctly — two independent edits, both preserved, object count unchanged.
 
+- **Merging from WSL against a Windows Unity install works.** Verified on
+  Ubuntu/WSL2 with the repo at `/mnt/c/...`: the wrapper finds
+  `UnityYAMLMerge.exe` under the `/mnt/c` Hub root, `wslpath -m` converts the
+  paths git supplies, and the Windows binary merges them over interop. A real
+  scene came through correctly — two independent edits both preserved, 16
+  objects in and out, and the result differed from the input side, so the
+  merge genuinely happened rather than falling through to a copy.
+
+  `[unverified]` for a repo living on the **Linux** filesystem (`/home/...`)
+  rather than `/mnt/c`. There `wslpath -m` yields a `\\wsl.localhost\...` UNC
+  path, and whether UnityYAMLMerge.exe opens those hasn't been tested.
+
 - **PowerShell mangles `git config` values containing spaces + embedded
   quotes** — `driver = C:/Program Files/...` silently truncated to
   `C:/Program`. Use the 8.3 short path (`C:/PROGRA~1/...`) or write
