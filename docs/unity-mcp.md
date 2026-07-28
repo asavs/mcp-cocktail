@@ -28,8 +28,11 @@ start its server; see the setup sections below.
 
 Order matters. Each step looks fine when it isn't, so do them in sequence.
 
-**1. Install the Pipeline package.** The MCP server exposes *zero tools*
-without it, while still reporting itself connected.
+**1. Confirm the Pipeline package is present.** It's already committed to
+`Packages/manifest.json` in this repo, so a fresh clone has it. The MCP server
+exposes *zero tools* without it, while still reporting itself connected — if
+you're setting this up somewhere the package isn't in the manifest yet, add it
+with:
 
 ```bash
 cd <repo>

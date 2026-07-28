@@ -422,6 +422,7 @@ Installed `uv` (`winget install astral-sh.uv`) for CoplayDev's server. Its
 remaining setup is GUI-only (*Window > MCP for Unity*), so it is not yet
 registered — the head-to-head tool-surface comparison is still open.
 
-Left uncommitted: `Packages/manifest.json` gained `com.unity.pipeline
+Left uncommitted at the time: `Packages/manifest.json` gained `com.unity.pipeline
 0.4.0-exp.1`. Deliberately kept off the PR #2 branch — adding an experimental
-package to a shared project should be its own decision.
+package to a shared project should be its own decision. (Committed shortly
+after, on this branch, in `86d8a71`; see `docs/unity-mcp.md`.)
