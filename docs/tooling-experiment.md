@@ -118,10 +118,32 @@ If you want the *work* kept rather than discarded, run the winning arm's
 approach again afterwards on a branch — don't try to preserve one arm's output
 while resetting for the next.
 
+### Each arm writes its own report
+
+Before reporting back, every subagent writes its full account to
+`docs/trials/T-NNN/arm-<x>.md`. Not a summary for the parent — the whole
+experience, including calls that failed and things it is unsure about. The
+required contents are in [trials/README.md](trials/README.md).
+
+This is deliberately more than the parent needs. The scorecard entry is a
+conclusion and discards the evidence it was drawn from; these reports are that
+evidence, written during the work by an agent that doesn't know it is being
+compared. They accumulate into a record of what the tools are like to use,
+which no verdict can reconstruct afterwards.
+
+Add to the subagent prompt:
+
+```
+Write your full account to docs/trials/T-NNN/arm-<x>.md before replying.
+Follow docs/trials/README.md for what it must contain. Do not read other
+files in that directory.
+```
+
 ### Synthesise
 
 The parent agent — not the subagents — compares results and writes the
-scorecard entry. Subagents report; they don't grade themselves.
+scorecard entry. Subagents report; they don't grade themselves. Cite the
+per-arm reports; don't restate them.
 
 ---
 
