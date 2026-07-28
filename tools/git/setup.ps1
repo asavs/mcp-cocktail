@@ -49,7 +49,19 @@ if (-not $sh) {
 }
 
 if ($sh) {
-    & $sh 'tools/git/unityyamlmerge' '--probe' 2>&1 | ForEach-Object { Write-Host $_ }
+    # PowerShell 5.1 (and Core before 7.2) turns each stderr line from a
+    # native command into a terminating NativeCommandError once merged via
+    # 2>&1, if $ErrorActionPreference is 'Stop' -- which it is, script-wide,
+    # above. The probe writes to stderr precisely when Unity isn't installed,
+    # which is the one case this block exists to handle gracefully ("report,
+    # never fail"). Relax it for just this call.
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $sh 'tools/git/unityyamlmerge' '--probe' 2>&1 | ForEach-Object { Write-Host $_ }
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
 } else {
     Write-Host 'NOTE: could not locate sh.exe to run the probe. Setup is still complete;'
     Write-Host '      git uses its own bundled shell to run the merge driver.'
