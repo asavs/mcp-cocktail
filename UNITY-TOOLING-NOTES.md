@@ -117,6 +117,14 @@ Their rough edges cost real time to rediscover. Write them down once.
 
 - `claude mcp list` reports it `✓ Connected`.
 
+- **`[feedback]` `unity mcp configure` does its work and then never exits.**
+  It printed the `claude mcp add` delegation, confirmed `File modified:
+  ~/.claude.json`, and then hung until killed (exit -1). The configuration was
+  correct and complete. This is the clearest instance of the CLI's
+  doesn't-terminate behaviour: the side effect lands, the process doesn't
+  return. Anything scripting the CLI needs a timeout and should verify the
+  side effect rather than wait on exit.
+
 - Registering mid-session does not expose the tools to an already-running agent
   session — restart to pick them up.
 
