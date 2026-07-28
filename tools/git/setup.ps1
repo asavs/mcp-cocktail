@@ -30,13 +30,23 @@ if (-not $driver) {
 }
 Write-Host "Merge driver: $driver"
 
-# The wrapper is POSIX sh. Git for Windows ships sh.exe, so this works in
-# PowerShell too -- but only report a problem, never fail setup over it.
-try {
-    $probe = & sh 'tools/git/unityyamlmerge' '--probe' 2>&1
-    Write-Host $probe
-} catch {
-    Write-Host 'NOTE: could not run the probe (is sh on PATH?). Setup itself is still complete.'
+# The wrapper is POSIX sh. Git for Windows ships sh.exe but does not put it on
+# PATH, so resolve it next to git.exe rather than assuming a bare `sh` works.
+# Git itself invokes the driver through its own shell, so a failure to probe
+# here says nothing about whether merging works -- report, never fail.
+$sh = Get-Command sh -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+if (-not $sh) {
+    $gitDir = Split-Path (Split-Path (Get-Command git).Source)   # ...\Git\cmd -> ...\Git
+    foreach ($candidate in @("$gitDir\bin\sh.exe", "$gitDir\usr\bin\sh.exe")) {
+        if (Test-Path $candidate) { $sh = $candidate; break }
+    }
+}
+
+if ($sh) {
+    & $sh 'tools/git/unityyamlmerge' '--probe' 2>&1 | ForEach-Object { Write-Host $_ }
+} else {
+    Write-Host 'NOTE: could not locate sh.exe to run the probe. Setup is still complete;'
+    Write-Host '      git uses its own bundled shell to run the merge driver.'
 }
 
 Write-Host 'Done.'
