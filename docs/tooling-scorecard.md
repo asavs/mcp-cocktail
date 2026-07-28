@@ -47,6 +47,10 @@ Short version, with the detail living elsewhere — this file is for verdicts,
 - **C is GUI-gated** — setup can't be fully scripted, making it the most
   expensive arm to stand up on a fresh machine.
   [Detail](unity-mcp.md#coplaydev-mcp-for-unity).
+- **C binds loopback, B binds every interface.** CoplayDev listens on
+  `127.0.0.1:8080`; Unity's Pipeline listens on `0.0.0.0:7800` while reporting
+  its own URL as `127.0.0.1`. On this one dimension C is the better-behaved
+  server. [Detail](unity-mcp.md#security-notes).
 
 ---
 

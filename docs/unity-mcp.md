@@ -16,8 +16,9 @@ unrelated implementations.
 | Clients | ~16 | 22 |
 | Status here | **working, 140 tools** | **working; Claude Code, Antigravity 2.0 and Codex configured** |
 
-`com.coplaydev.unity-mcp` is already in `Packages/manifest.json`;
-`com.unity.pipeline` is currently an **uncommitted** local addition.
+Both editor packages are in `Packages/manifest.json`, so a fresh clone has what
+each server needs. You still have to register the client and — for CoplayDev —
+start its server; see the setup sections below.
 
 ---
 
