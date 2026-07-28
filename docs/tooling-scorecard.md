@@ -4,7 +4,15 @@ Which of the three arms to reach for, and the trials that justify it.
 
 Protocol: [tooling-experiment.md](tooling-experiment.md). Arms: **A** = `unity`
 CLI, **B** = MCP official (`mcp__unity-editor-mcp__*`), **C** = MCP CoplayDev
-(`mcp__unityMCP__*`).
+(`mcp__unityMCP__*` — but see below).
+
+The tool prefix is derived from **the client's own config key**, so C's
+namespace differs per client and neither spelling is canonical: Codex's
+`config.toml` declares `[mcp_servers.unityMCP]` and Codex sees
+`mcp__unityMCP__*`; `~/.claude.json` declares `"UnityMCP"` and Claude Code sees
+`mcp__UnityMCP__*`. Searching for the other client's casing returns nothing,
+which reads as "the tools aren't loaded". Check your own config before
+concluding that.
 
 ---
 
@@ -90,6 +98,10 @@ one hides a sub-API you have to learn from its description, and a wrong
 **Only in B:** `set_authoring_root` path confinement, and `confirm=true` /
 `dry_run` guards on destructive tools. C's guards, if any, are inside each
 dispatcher and not visible from the tool list. `[unverified]`
+
+C's tools have since been invoked through a normal client (`read_console`
+returned structured console data), so the raw-HTTP procedure above is a
+diagnostic for when a client won't load them, not the working path.
 
 **Not yet compared:** actual behaviour. Everything above is read off the tool
 lists, not from running the same task through both. That's what a T-001

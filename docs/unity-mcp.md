@@ -61,13 +61,28 @@ and modifies `~/.claude.json`. Note that's **user scope with a hardcoded project
 path**: global across your machine but pinned to this project. Re-scope it if
 you work on more than one Unity project.
 
+That registration deliberately stores bare `unity`, not an absolute path. On
+Windows, GUI applications inherit a snapshot of the user PATH when their
+process starts. If the CLI was installed while Claude Code or its launcher was
+already running, `claude mcp list` reports `Connection closed` even while
+Pipeline is healthy and `unity list` works in a newer terminal. Fully restart
+Claude first. For a registration that does not depend on PATH inheritance:
+
+```powershell
+$unity = "$env:LOCALAPPDATA\Unity\bin\unity.exe"
+claude mcp remove unity-editor-mcp -s user
+claude mcp add -s user -t stdio unity-editor-mcp -- $unity mcp --project-path <repo>
+```
+
 The command completes its work and then **never exits** — the config lands
 correctly; the process just doesn't return. Verify the side effect rather than
 waiting on it.
 
-**No client restart is needed.** The server re-enumerates its tools when the
-Pipeline server comes up; a client that connected earlier picks up all 140 on
-its own.
+**No client restart is needed merely because Pipeline comes up late.** Once the
+stdio process can launch, it re-enumerates its tools when Pipeline becomes
+reachable and a client that connected earlier picks up all 140 on its own.
+This does not repair a stale PATH snapshot; that requires a process restart or
+the absolute-path registration above.
 
 ### Verify
 
@@ -270,6 +285,22 @@ An HTTP `406` is a healthy result for this deliberately incomplete GET: the
 server is reachable but expects an MCP-compatible `Accept` header. Connection
 refused or a timeout means **Start Server** is needed in the Unity window.
 
+**Agent startup handshake.** Once CoplayDev tools are loaded, read these
+resources before invoking them:
+
+1. `mcpforunity://custom-tools` — project-specific tool inventory and enabled
+   groups. This setup currently reports 34 project tools; the complete MCP
+   `tools/list` response contains 47 entries. The 13-tool gap is server-side
+   and not project-derived: script file editing (`apply_text_edits`,
+   `create_script`, `validate_script`, `find_in_file`, `get_sha`, …),
+   `unity_docs`, `set_active_instance`, and the tool-management tools.
+2. `mcpforunity://instances` — connected editors as `Name@hash`. If it returns
+   more than one, call `set_active_instance` with the exact identifier before
+   any tool call.
+
+Instance hashes are ephemeral. Always rediscover the identifier rather than
+copying one into documentation or automation.
+
 **Reading the tool list without a client.** If the client won't load the tools
 and you need to know whether the server actually has any, speak MCP to it
 directly. This distinguishes "server is empty" from "client isn't loading":
@@ -299,8 +330,12 @@ Recovery order:
 4. Confirm the selected client says `Configured`.
 5. Restart the affected client. For Codex, quit the whole desktop app.
 
-Starting the server after Codex is already running may make the endpoint
-healthy without adding tools to that existing Codex process.
+Starting the server after a client is already running may make the endpoint
+healthy without adding tools to that existing client process. Confirmed on
+Codex and on Claude Code: in both cases the config was correct, the server
+returned all 47 tools over raw HTTP, and the client still exposed none. Only a
+process started *after* the server was listening picked them up — for Claude
+Code that means a new session, not a new conversation in the same one.
 
 ---
 
