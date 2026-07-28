@@ -20,8 +20,14 @@ $root = git rev-parse --show-toplevel
 if (-not $root) { throw 'Not inside a git repository.' }
 Set-Location $root
 
-git config --local include.path ../.gitconfig-unity
-Write-Host 'Configured: include.path -> .gitconfig-unity'
+# Absolute, not ../.gitconfig-unity: `--local` writes the main repo's shared
+# config even from inside a worktree, where a relative path still resolves
+# correctly. In a submodule, though, that config lives under the
+# superproject's .git/modules/<name>/, where ../ would miss. This does trade
+# away one thing the relative form had: it stops resolving if this clone is
+# later moved or renamed. Re-run this script if that happens.
+git config --local include.path "$root/.gitconfig-unity"
+Write-Host "Configured: include.path -> $root/.gitconfig-unity"
 
 $driver = git config --get merge.unityyamlmerge.driver
 if (-not $driver) {

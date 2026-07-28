@@ -8,11 +8,18 @@
 
 set -eu
 
-cd "$(git rev-parse --show-toplevel)"
+toplevel="$(git rev-parse --show-toplevel)"
+cd "${toplevel}"
 
-git config --local include.path ../.gitconfig-unity
+# Absolute, not ../.gitconfig-unity: `--local` writes the main repo's shared
+# config even from inside a worktree, where a relative path still resolves
+# correctly. In a submodule, though, that config lives under the
+# superproject's .git/modules/<name>/, where ../ would miss. This does trade
+# away one thing the relative form had: it stops resolving if this clone is
+# later moved or renamed. Re-run this script if that happens.
+git config --local include.path "${toplevel}/.gitconfig-unity"
 
-printf 'Configured: include.path -> .gitconfig-unity\n'
+printf 'Configured: include.path -> %s/.gitconfig-unity\n' "${toplevel}"
 
 # Verify the driver actually resolves, so setup fails loudly rather than at
 # the first merge conflict.
