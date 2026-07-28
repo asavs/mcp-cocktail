@@ -55,6 +55,9 @@ Short version, with the detail living elsewhere — this file is for verdicts,
 - **C is GUI-gated** — setup can't be fully scripted, making it the most
   expensive arm to stand up on a fresh machine.
   [Detail](unity-mcp.md#coplaydev-mcp-for-unity).
+- **B can be allowlisted read-only, C mostly can't** — 44 of 140 vs 9 of 47,
+  because a permission rule can only be as precise as the tool it names.
+  [Detail](#tool-surfaces-at-a-glance).
 - **C binds loopback, B binds every interface.** CoplayDev listens on
   `127.0.0.1:8080`; Unity's Pipeline listens on `0.0.0.0:7800` while reporting
   its own URL as `127.0.0.1`. On this one dimension C is the better-behaved
@@ -79,6 +82,21 @@ self-documenting: the schema tells you what the call does, and a wrong call
 fails at validation. C's 47 are compact — far less context to load — but each
 one hides a sub-API you have to learn from its description, and a wrong
 `action` fails at runtime.
+
+**Granularity also decides what can be pre-approved.** A permission rule names
+a tool, so it can only be as precise as the tool is. B's read/write split falls
+on tool boundaries — `get_scene_hierarchy` cannot write, `set_transform` cannot
+not-write — so 44 of its 140 are allowlistable as read-only with no judgement
+call. C's dispatchers put both sides of that line inside one name:
+`manage_scene` covers `get_hierarchy` and `delete`, `manage_asset` covers
+reading and deleting. Only 9 of C's 47 could be allowlisted, and one of those,
+`read_console`, is a compromise — its `clear` action mutates console state,
+which is ephemeral UI rather than project data. The rest are unreachable
+without prompting on every call, however harmless the `action`. See
+[`.claude/settings.json`](../.claude/settings.json).
+
+This is the first non-structural difference found without running a trial, and
+it favours B for unattended agent work specifically.
 
 **Only in C:**
 
