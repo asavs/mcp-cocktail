@@ -1,0 +1,9 @@
+# These are shell scripts executed by `sh`. If git checks them out with CRLF,
+# the trailing \r becomes part of every command and they fail on macOS/Linux
+# (Git Bash happens to tolerate it, which makes this easy to miss on Windows).
+# Pin them to LF regardless of the checking-out platform's core.autocrlf.
+unityyamlmerge  text eol=lf
+setup.sh        text eol=lf
+
+# PowerShell is fine either way; keep it native to Windows.
+setup.ps1       text eol=crlf
