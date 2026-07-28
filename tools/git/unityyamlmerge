@@ -132,18 +132,30 @@ if [ -n "${TOOL}" ]; then
     # Someone who wants interactive resolution should configure a git mergetool
     # directly rather than have one appear mid-merge.
     #
-    # A TOOL found under /mnt/ (see the WSL Hub roots above) is a native
-    # Windows binary reached over the WSL interop mount. It cannot resolve the
-    # paths git hands it -- those are WSL-side (a temp file under /tmp, or the
-    # working tree under the Linux filesystem), not anything the Windows side
-    # can open directly. Route them through wslpath first, and only in that
-    # case: everywhere else these are already native paths.
-    if printf '%s' "${TOOL}" | grep -q '^/mnt/' && command -v wslpath >/dev/null 2>&1; then
-        _wbase=$(wslpath -m "${BASE}" 2>/dev/null) && BASE=${_wbase}
-        _wtheirs=$(wslpath -m "${THEIRS}" 2>/dev/null) && THEIRS=${_wtheirs}
-        _wours=$(wslpath -m "${OURS}" 2>/dev/null) && OURS=${_wours}
-        _wdest=$(wslpath -m "${DEST}" 2>/dev/null) && DEST=${_wdest}
-    fi
+    # A TOOL ending in .exe/.EXE is a native Windows binary; under WSL it's
+    # reached over the interop mount and can't resolve the paths git hands it
+    # -- those are WSL-side (a temp file under /tmp, or the working tree under
+    # the Linux filesystem), not anything the Windows side can open directly.
+    # Gate on the extension rather than a /mnt/ path prefix: WSL lets
+    # /etc/wsl.conf remount Windows drives at a custom root (e.g. /c/ instead
+    # of /mnt/c/), so a prefix check misses those configs. Gate on wslpath's
+    # presence too, both because that's what does the translating and because
+    # it is otherwise the only reliable "are we actually under WSL" signal --
+    # native Windows Git Bash resolves the same *.exe path but has no wslpath,
+    # so this stays a no-op there. And check the extension at all rather than
+    # firing on any wslpath-having environment: Unity also ships a native
+    # Linux Editor, and a Linux ELF binary found by find_merge_tool() while
+    # running inside WSL already gets native paths and needs no translation.
+    case "${TOOL}" in
+        *.exe|*.EXE)
+            if command -v wslpath >/dev/null 2>&1; then
+                _wbase=$(wslpath -m "${BASE}" 2>/dev/null) && BASE=${_wbase}
+                _wtheirs=$(wslpath -m "${THEIRS}" 2>/dev/null) && THEIRS=${_wtheirs}
+                _wours=$(wslpath -m "${OURS}" 2>/dev/null) && OURS=${_wours}
+                _wdest=$(wslpath -m "${DEST}" 2>/dev/null) && DEST=${_wdest}
+            fi
+            ;;
+    esac
 
     "${TOOL}" merge -h -p --force --fallback none \
         "${BASE}" "${THEIRS}" "${OURS}" "${DEST}"
