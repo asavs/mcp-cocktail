@@ -38,6 +38,13 @@ PROBE=0
 if [ "${1:-}" = "--probe" ]; then
     PROBE=1
 else
+    if [ $# -lt 3 ]; then
+        echo "usage: $0 <base> <theirs> <ours> [dest]" >&2
+        echo "       $0 --probe" >&2
+        echo "This is a git merge driver/mergetool; it's not meant to be run directly" >&2
+        echo "with fewer than 3 arguments. See .gitconfig-unity for how it's wired up." >&2
+        exit 1
+    fi
     BASE=$1
     THEIRS=$2
     OURS=$3
@@ -58,6 +65,8 @@ find_merge_tool() {
     for _root in \
         "/c/Program Files/Unity/Hub/Editor" \
         "/c/Program Files (x86)/Unity/Hub/Editor" \
+        "/mnt/c/Program Files/Unity/Hub/Editor" \
+        "/mnt/c/Program Files (x86)/Unity/Hub/Editor" \
         "${HOME}/Unity/Hub/Editor" \
         "/Applications/Unity/Hub/Editor" \
         "/opt/unity/Hub/Editor"
