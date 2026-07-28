@@ -34,18 +34,19 @@ true by architecture, not worth a trial. The interesting rows are the `?`s.
 
 ### Standing observations
 
-- **A fails quietly.** The CLI has returned confident wrong answers rather than
-  errors at least three times (`editors running` misreporting, path-less
-  `unity open` silently opening a second Editor, `pipeline list` inventing a
-  project from the cwd). Budget verification time when using it.
-- **B has the better safety model.** `confirm=true` on 17 destructive tools,
-  `dry_run`, `set_authoring_root` path confinement, poll-based async. Also
-  ships `eval`/`eval_file`, which bypass all of it.
-- **B's errors are unusually good.** `unity list` names all three prerequisites
-  when the Pipeline isn't reachable. That's the behaviour to compare others
-  against.
-- **C is GUI-gated.** Setup can't be fully scripted, which makes it the hardest
-  arm to stand up on a fresh machine — a real cost even if its tools are good.
+Short version, with the detail living elsewhere — this file is for verdicts,
+[UNITY-TOOLING-NOTES.md](../UNITY-TOOLING-NOTES.md) is for observations.
+
+- **A fails quietly** — returns confident wrong answers rather than errors.
+  [Detail](unity-cli.md#scripting-the-cli).
+- **B has the better safety model** (`confirm=true`, `dry_run`, path
+  confinement) — and ships `eval`/`eval_file`, which bypass all of it.
+  [Detail](unity-mcp.md#security-notes).
+- **B's errors are unusually good** — `unity list` names all three
+  prerequisites when the Pipeline isn't reachable. Use it as the benchmark.
+- **C is GUI-gated** — setup can't be fully scripted, making it the most
+  expensive arm to stand up on a fresh machine.
+  [Detail](unity-mcp.md#coplaydev-mcp-for-unity).
 
 ---
 

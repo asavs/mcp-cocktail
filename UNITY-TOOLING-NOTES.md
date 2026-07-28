@@ -6,6 +6,29 @@ actually behave, written by the humans and agents working in this repo.
 **Purpose:** both tools are new and (in the CLI's case) explicitly experimental.
 Their rough edges cost real time to rediscover. Write them down once.
 
+**Scope:** this file is for *observations* — quirks, traps, version-specific
+behaviour. Comparative verdicts about which tool to use go in
+[docs/tooling-scorecard.md](docs/tooling-scorecard.md); setup instructions go
+in [docs/unity-cli.md](docs/unity-cli.md) and
+[docs/unity-mcp.md](docs/unity-mcp.md).
+
+## Contents
+
+- [How to contribute](#how-to-contribute)
+- [Environment these notes were taken against](#environment-these-notes-were-taken-against)
+- **Unity CLI**
+  - [Install](#install)
+  - [Reliability / ergonomics](#reliability--ergonomics) — the confident-wrong-answer failures
+  - [What works well](#what-works-well)
+- **Unity MCP**
+  - [Unity official](#unity-mcp) — registration, Connected-but-zero-tools
+  - [The tool surface](#unity-official-the-tool-surface-once-pipeline-is-live) — 140 tools, safety model, `eval`, `0.0.0.0` binding
+  - [Sequencing gotcha](#sequencing-gotcha-cost-us-two-restarts) — install → Editor restart → import → tools appear
+  - [CoplayDev MCP for Unity](#coplaydev-mcp-for-unity-comcoplaydevunity-mcp) — uv/PATH, stale README, client list
+  - [Running both servers at once](#running-both-servers-at-once)
+- [Git / UnityYAMLMerge](#git--unityyamlmerge) — driver placeholders, partial-config fatal
+- [Log](#log) — dated session entries, newest first
+
 ## How to contribute
 
 - Append to the relevant section; don't rewrite others' entries.

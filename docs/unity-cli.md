@@ -1,7 +1,7 @@
 # Unity CLI
 
-How this machine was set up, and how to reproduce it. Written against CLI
-`1.0.0-beta.3` and editor `6000.5.5f1` on Windows 11, 2026-07-28.
+Installing and using the `unity` CLI. Written against CLI `1.0.0-beta.3` and
+editor `6000.5.5f1`, verified on Windows 11, 2026-07-28.
 
 Unity announced the CLI at Unite Seoul, July 2026. It is a standalone `unity`
 binary that manages editors, modules, projects, auth and automation from a
@@ -125,6 +125,17 @@ to `open`.)
 
 ## Scripting the CLI
 
+This is the canonical account of the CLI's reliability characteristics; other
+docs link here rather than restating them.
+
+**The failure mode to design around: this CLI returns confident wrong answers
+rather than errors.** Three confirmed cases so far — `editors running`
+misreporting which instance had a project open, path-less `unity open` silently
+launching a second editor instead of erroring, and `pipeline list` inventing a
+project row from the current directory. None announced itself. Budget
+verification time, and never report success on the strength of a command
+appearing to work.
+
 - **Use `--json` / `--format json`.** Output is consistent and genuinely
   machine-readable. Parsing the human tables is a trap — several have multiple
   boolean-looking columns, and a loose grep matches the wrong one.
@@ -139,6 +150,23 @@ to `open`.)
 - **Don't call it from latency-sensitive paths.** `tools/git/unityyamlmerge`
   deliberately probes the filesystem instead of calling `unity editors path`,
   because a CLI that doesn't return would hang git mid-merge.
+
+## Verifying your work
+
+Because of the above, check the effect rather than the invocation:
+
+```bash
+unity list                 # tools the live editor exposes (run from the repo root)
+unity test <path>          # EditMode/PlayMode tests + report
+unity projects info        # confirm the project/editor version actually in use
+```
+
+`unity list` covers only Unity's official Pipeline-backed surface — for
+CoplayDev's server use the checks in
+[unity-mcp.md](unity-mcp.md#verify-and-recover).
+
+For whether a change actually compiled, the fastest signal is the editor's own
+console via the official MCP: `get_console_logs` with `severity: error`.
 
 ## Uninstalling
 

@@ -179,10 +179,12 @@ OpenClaw, OpenCode, QwenCode, Rider, Trae, VSCode, VSCodeInsiders, Windsurf.
 
 **Grok is not supported.**
 
-### Client-specific setup on this machine
+### Reference: one known-good configuration
 
-The per-client configurators write different formats and locations. These are
-the resulting registrations for the three clients currently in use:
+The per-client configurators write different formats to different locations.
+Below is a worked example — the registrations produced for three clients on a
+Windows 11 setup, 2026-07-28. Treat it as a reference for what *correct* looks
+like, not as a description of your machine.
 
 **Claude Code**
 

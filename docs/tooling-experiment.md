@@ -136,8 +136,9 @@ everything). Measure what predicts future pain:
 - **Recoverable vs terminal friction** — did the arm fail in a way that told
   you how to fix it, or did it just produce a wrong answer? This is the single
   most valuable column. This CLI has repeatedly returned *confident wrong
-  answers* rather than errors; an arm that fails loudly beats one that fails
-  quietly, even if it fails more often.
+  answers* rather than errors ([detail](unity-cli.md#scripting-the-cli)); an
+  arm that fails loudly beats one that fails quietly, even if it fails more
+  often.
 - **Verifiability** — could the arm confirm its own work, or did you need
   another arm to check it?
 - **Expressiveness gaps** — what the arm simply couldn't say.
