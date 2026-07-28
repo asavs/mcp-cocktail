@@ -65,7 +65,14 @@ find_merge_tool() {
         [ -d "${_root}" ] || continue
 
         # Exact project version first, then newest installed as a fallback.
-        _newest=$(ls -1d "${_root}"/* 2>/dev/null | sort -V | tail -1)
+        # `sort -V` is a GNU extension; BSD sort (macOS default) rejects it
+        # with "illegal option -- V" and would otherwise silently drop this
+        # fallback. Probe for support and fall back to plain sort.
+        if echo | sort -V >/dev/null 2>&1; then
+            _newest=$(ls -1d "${_root}"/* 2>/dev/null | sort -V | tail -1)
+        else
+            _newest=$(ls -1d "${_root}"/* 2>/dev/null | sort | tail -1)
+        fi
         for _editor in "${_root}/${_ver}" "${_newest}"; do
             [ -n "${_editor}" ] && [ -d "${_editor}" ] || continue
             for _rel in \
@@ -108,11 +115,16 @@ echo "unityyamlmerge: UnityYAMLMerge not found - falling back to a plain text me
 echo "                Scene/prefab conflicts will need manual resolution." >&2
 echo "                Set UNITY_YAML_MERGE=/path/to/UnityYAMLMerge to enable smart merging." >&2
 
-git merge-file -L ours -L base -L theirs "${OURS}" "${BASE}" "${THEIRS}"
-rc=$?
-
+# In driver mode DEST and OURS are the same path (see .gitconfig-unity's
+# `%A %A`), so this is a no-op. In mergetool mode they differ ($LOCAL vs
+# $MERGED) -- copy first and merge into DEST directly, rather than merging
+# into OURS and copying afterward, so the wrapper never mutates a temp file
+# ($LOCAL) it wasn't asked to write to.
 if [ "${DEST}" != "${OURS}" ]; then
     cp "${OURS}" "${DEST}"
 fi
+
+git merge-file -L ours -L base -L theirs "${DEST}" "${BASE}" "${THEIRS}"
+rc=$?
 
 exit ${rc}
