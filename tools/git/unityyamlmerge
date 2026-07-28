@@ -121,7 +121,11 @@ echo "                Set UNITY_YAML_MERGE=/path/to/UnityYAMLMerge to enable sma
 # into OURS and copying afterward, so the wrapper never mutates a temp file
 # ($LOCAL) it wasn't asked to write to.
 if [ "${DEST}" != "${OURS}" ]; then
-    cp "${OURS}" "${DEST}"
+    if ! cp "${OURS}" "${DEST}"; then
+        echo "unityyamlmerge: failed to copy ${OURS} to ${DEST}; aborting rather than" >&2
+        echo "                merging against a stale or missing destination." >&2
+        exit 1
+    fi
 fi
 
 git merge-file -L ours -L base -L theirs "${DEST}" "${BASE}" "${THEIRS}"
