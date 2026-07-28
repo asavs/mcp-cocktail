@@ -157,6 +157,33 @@ if [ -n "${TOOL}" ]; then
             ;;
     esac
 
+    # `-h` only covers errors raised once `merge` has been accepted. Anything
+    # that fails earlier -- in argument parsing -- still raises a modal dialog
+    # and waits forever, and no flag turns that off, because the flag is an
+    # option of the subcommand that never got parsed. Verified: invoking the
+    # tool with no subcommand blocks indefinitely whether output goes to a
+    # terminal or a file, and blocks with `-h` too.
+    #
+    # This wrapper always passes `merge` first, so it should never reach that
+    # state. `should never` is exactly the assumption worth bounding when the
+    # failure mode is git hanging with no output, so cap the call where the
+    # shell can. `timeout` is GNU coreutils: present in Git Bash, WSL and
+    # Linux, absent from a stock macOS, hence the probe rather than a bare
+    # call.
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "${UNITY_YAML_MERGE_TIMEOUT:-300}" \
+            "${TOOL}" merge -h -p --force --fallback none \
+            "${BASE}" "${THEIRS}" "${OURS}" "${DEST}"
+        rc=$?
+        if [ "${rc}" -eq 124 ]; then
+            echo "unityyamlmerge: UnityYAMLMerge did not return within ${UNITY_YAML_MERGE_TIMEOUT:-300}s and was killed." >&2
+            echo "                It may have been waiting on a dialog. Treating this as a" >&2
+            echo "                conflict; resolve ${DEST} by hand." >&2
+            echo "                Set UNITY_YAML_MERGE_TIMEOUT to change the limit." >&2
+        fi
+        exit "${rc}"
+    fi
+
     "${TOOL}" merge -h -p --force --fallback none \
         "${BASE}" "${THEIRS}" "${OURS}" "${DEST}"
     exit $?

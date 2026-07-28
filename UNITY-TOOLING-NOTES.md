@@ -169,9 +169,21 @@ See issue #1 for the full write-up. Key findings:
      disables it.
 
   Neither flag is on by default and neither appears in Unity's merge-driver
-  documentation. `-h` is only discoverable by running the tool with no
-  arguments. Confirmed that both flags together still merge a real scene
+  documentation. Confirmed that both flags together still merge a real scene
   correctly — two independent edits, both preserved, object count unchanged.
+
+  **`-h` does not cover argument errors, and nothing does.** It is an option
+  *of the `merge` subcommand*, so anything failing before that parses still
+  raises a dialog and waits. Invoking the tool with no subcommand blocks
+  indefinitely — to a terminal, redirected to a file, and with `-h` passed;
+  all three verified, all three hang. The irony is that `-h` is only
+  discoverable by running the tool with no arguments, which is itself the
+  thing that hangs. Redirect and use a timeout if you ever run it by hand.
+
+  Because no flag closes that path, the wrapper bounds the call with
+  `timeout` where the shell has it (`UNITY_YAML_MERGE_TIMEOUT`, default 300s)
+  and reports a killed merge as a conflict rather than letting git wait on a
+  window nobody can see.
 
 - **Merging from WSL against a Windows Unity install works.** Verified on
   Ubuntu/WSL2 with the repo at `/mnt/c/...`: the wrapper finds
