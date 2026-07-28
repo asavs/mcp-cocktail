@@ -144,6 +144,16 @@ Newest first. Template at the bottom.
 **Versions** CLI `1.0.0-beta.3`, Editor `6000.5.5f1`, Pipeline `0.4.0-exp.1`,
 MCP for Unity `v10.0.0` (server `3.4.5`)
 
+> **Protocol deviation — read the columns accordingly.** The protocol requires
+> one blind subagent per arm ([why](tooling-experiment.md#blind-the-arms)). This
+> ran as a single agent driving both arms with full knowledge of the
+> comparison, which makes it performer and grader at once. The outcome column
+> is unaffected — "the value read back as `(1,1,1)`" is a state read, not a
+> judgement. **Steps** and **Friction** are weakened: each arm's path was chosen
+> by someone who had already read both schemas, so neither count reflects what
+> an arm costs an agent meeting it cold. Re-run blind before treating those two
+> columns as evidence.
+
 **Task** Create a root empty `T001-<arm>`, containing a child empty at local
 position `(1, 2, 3)` carrying a `BoxCollider` with `size` `(2, 2, 2)`.
 **Done when** An independent read shows both trees with the correct parenting,
