@@ -185,6 +185,38 @@ See issue #1 for the full write-up. Key findings:
   and reports a killed merge as a conflict rather than letting git wait on a
   window nobody can see.
 
+  **The usage text, so nobody has to run it bare again.** Transcribed below
+  precisely because obtaining it costs you a stuck modal dialog. Version
+  1.0.1, shipped with editor `6000.5.5f1`:
+
+  ```
+  usage: UnityYAMLMerge merge  [-l|-r|-p|-h] [-i file] [-o file]
+                               [--rules rulesfile]
+                               [--fallback fallbackspecfile]
+                               [--force] [--nomappinginoneline] [--describe]
+                               <base> <left> <right> [dest]
+                               [premerge base dest] [premerge right dest]
+         UnityYAMLMerge strip <left> <right>
+
+         -l         Resolve merge conflicts using left  (theirs)
+         -r         Resolve merge conflicts using right (mine)
+         -i file    Resolve merge conflicts using merge file
+         -o file    File to write merge conflicts into
+         -p         Use premerging
+         -h         Use 'headless' mode (no error dialogs)
+         --rules    A files with merge rules
+         --typeInfo A file with type information on objects in asset files
+         --fallback Spec file defining fallback tools on conflicts if not
+                    using builtin. Can be set to 'none' to disable fallback.
+         --force    Force merging even on unknown file extensions
+         --nomappinginoneline Force line break when length exceeds 80 chars
+         --describe Include description of what has been done in the -o file
+  ```
+
+  Note the argument order: `<base> <left> <right> [dest]`, where **left is
+  theirs and right is mine** — the opposite of the intuitive reading, and
+  worth checking against any invocation you write.
+
 - **Merging from WSL against a Windows Unity install works.** Verified on
   Ubuntu/WSL2 with the repo at `/mnt/c/...`: the wrapper finds
   `UnityYAMLMerge.exe` under the `/mnt/c` Hub root, `wslpath -m` converts the
