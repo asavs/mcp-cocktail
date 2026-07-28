@@ -172,14 +172,27 @@ the tool wants the serialized `m_Size`. That cost a failed call and a
 discovery read, and it is the good kind of friction: the arm said what was
 wrong and the fix was immediate.
 
-**C did not stumble at all here** — but has a path that fails silently. Probed
-separately, `manage_gameobject action=create` with `component_properties`
-returns `"success": true`, adds the component, and leaves the property at its
-default. Reproduced twice. The arm-C agent never hit it because it used
-`manage_components`, which the dispatcher's own description tells you to do
-(*"NOT for component management"*). So: real defect, on a path the tool warns
-against, reachable by anyone who takes the obvious shortcut of setting
-properties at creation time. `[reproduced, not reported upstream]`
+**C did not stumble at all here** — but has a path that fails silently, and
+it's worse than it first looked. Probed separately, `manage_gameobject
+action=create` with `component_properties` returns `"success": true`, adds
+the component, and leaves the property at its default. Reproduced twice, then
+confirmed against the package source at installed commit `7b7db7b31f4e`:
+`ManageGameObject.cs:55-68` accepts and coerces `componentProperties` for
+every action, but only `GameObjectModify.cs:227` ever reads it back — the
+create path never consults it. `GameObjectCreate.cs:239-258` does implement
+per-component properties, but reads them from `{typeName, properties}`
+objects nested inside `componentsToAdd`; the Python layer types
+`components_to_add` as `list[str] | str | None`, so Pydantic rejects that
+shape before it reaches Unity — there's no JSON-string workaround, since the
+:55-68 coercion covers `componentProperties` only. Net result: **there is no
+reachable way to set a component property at creation time** — one argument
+is accepted then silently ignored, the other is implemented but unreachable
+from the client. Confirmed working on `action=modify`. The arm-C agent never
+hit it because it used `manage_components`, which the dispatcher's own
+description tells you to do (*"NOT for component management"*) — that path
+happens to sidestep the bug rather than avoid a warned-against shortcut.
+Filed upstream: [CoplayDev/unity-mcp#1297](https://github.com/CoplayDev/unity-mcp/issues/1297).
+`[reproduced, source-confirmed, reported upstream]`
 
 **Each arm has a handle trap, and they are mirror images.** B returned the
 *same* `instanceId` for genuinely different objects — `Main Camera` and
@@ -211,8 +224,8 @@ citing this trial. Added the verification-asymmetry and instanceId
 observations.
 
 **Follow-ups**
-- Report C's `component_properties` drop upstream — accepting an argument,
-  ignoring it, and returning success is a bug on any reading.
+- ~~Report C's `component_properties` drop upstream~~ — done, source-confirmed:
+  [CoplayDev/unity-mcp#1297](https://github.com/CoplayDev/unity-mcp/issues/1297).
 - Does the drop affect other C dispatchers that take properties inline
   (`manage_material`, `manage_scriptable_object`)?
 - What causes B's duplicate `instanceId`? Harmless here only because
