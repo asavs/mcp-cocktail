@@ -54,6 +54,47 @@ Short version, with the detail living elsewhere — this file is for verdicts,
 
 ---
 
+## Tool surfaces at a glance
+
+Captured 2026-07-28. B via `unity list`; C by speaking MCP directly to
+`http://127.0.0.1:8080/mcp` (see [unity-mcp.md](unity-mcp.md#verify-and-recover)).
+
+| | B — Unity official | C — CoplayDev |
+|---|---|---|
+| Server | Pipeline `0.4.0-exp.1` | `mcp-for-unity-server 3.4.5` |
+| Tools | **140** | **47** |
+| Granularity | fine-grained — `create_gameobject`, `set_parent`, `set_active` | coarse dispatchers — `manage_gameobject`, `manage_scene` + an `action` argument |
+| Arbitrary code | `eval` / `eval_file` | `execute_code` |
+
+Granularity is the real difference, and it cuts both ways. B's 140 tools are
+self-documenting: the schema tells you what the call does, and a wrong call
+fails at validation. C's 47 are compact — far less context to load — but each
+one hides a sub-API you have to learn from its description, and a wrong
+`action` fails at runtime.
+
+**Only in C:**
+
+- `unity_reflect` / `unity_docs` — verify Unity APIs against the actual
+  assemblies. The server's own instructions say *"LLM training data frequently
+  contains incorrect, outdated, or hallucinated Unity APIs"* and tell agents to
+  reflect before answering. Nothing in B addresses hallucinated APIs, and for
+  agent work this may be C's strongest argument.
+- `generate_image` / `generate_model` — AI asset generation.
+- `manage_probuilder`, `manage_vfx`, `manage_profiler`, `manage_ui` — B has no
+  equivalents.
+- `set_active_instance` — explicit routing when several Editors are connected.
+  B has no multi-instance concept.
+- `batch_execute` — several operations per call, which partly offsets the
+  latency of coarse dispatchers.
+
+**Only in B:** `set_authoring_root` path confinement, and `confirm=true` /
+`dry_run` guards on destructive tools. C's guards, if any, are inside each
+dispatcher and not visible from the tool list. `[unverified]`
+
+**Not yet compared:** actual behaviour. Everything above is read off the tool
+lists, not from running the same task through both. That's what a T-001
+authoring trial is for.
+
 ## Trials
 
 Newest first. Template at the bottom.

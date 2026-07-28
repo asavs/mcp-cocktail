@@ -270,6 +270,27 @@ An HTTP `406` is a healthy result for this deliberately incomplete GET: the
 server is reachable but expects an MCP-compatible `Accept` header. Connection
 refused or a timeout means **Start Server** is needed in the Unity window.
 
+**Reading the tool list without a client.** If the client won't load the tools
+and you need to know whether the server actually has any, speak MCP to it
+directly. This distinguishes "server is empty" from "client isn't loading":
+
+```powershell
+$h = @{ 'Content-Type'='application/json'; 'Accept'='application/json, text/event-stream' }
+$init = @{ jsonrpc='2.0'; id=1; method='initialize'; params=@{ protocolVersion='2024-11-05'
+           capabilities=@{}; clientInfo=@{name='diag';version='1'} } } | ConvertTo-Json -Depth 6
+$r = Invoke-WebRequest 'http://127.0.0.1:8080/mcp' -Method Post -Headers $h -Body $init -UseBasicParsing
+$h2 = $h + @{ 'mcp-session-id' = $r.Headers['mcp-session-id'] }
+Invoke-WebRequest 'http://127.0.0.1:8080/mcp' -Method Post -Headers $h2 -UseBasicParsing `
+  -Body (@{jsonrpc='2.0';method='notifications/initialized'} | ConvertTo-Json) | Out-Null
+$tl = Invoke-WebRequest 'http://127.0.0.1:8080/mcp' -Method Post -Headers $h2 -UseBasicParsing `
+  -Body (@{jsonrpc='2.0';id=2;method='tools/list';params=@{}} | ConvertTo-Json)
+(( ($tl.Content -split "`n" | ? { $_ -like 'data: *' } | select -First 1) -replace '^data: ','' ) |
+  ConvertFrom-Json).result.tools.name | Sort-Object
+```
+
+Responses come back as SSE (`data: {...}`), hence the parsing. A healthy server
+returns 47 tools and a `serverInfo` of `mcp-for-unity-server`.
+
 Recovery order:
 
 1. Open **Window > MCP for Unity > Toggle MCP Window**.
