@@ -17,7 +17,17 @@ cd "${toplevel}"
 # superproject's .git/modules/<name>/, where ../ would miss. This does trade
 # away one thing the relative form had: it stops resolving if this clone is
 # later moved or renamed. Re-run this script if that happens.
-git config --local include.path "${toplevel}/.gitconfig-unity"
+#
+# Check-then-add, not a plain assign: `git config --local include.path X`
+# fails (exit 5, "cannot overwrite multiple values with a single value") the
+# moment two or more include.path entries already exist locally -- for any
+# reason, not just from a prior run of this script -- and set -e would then
+# abort setup right here. Verified with two pre-existing entries. --get-all
+# plus a literal grep keeps this idempotent without touching values that
+# aren't ours.
+if ! git config --local --get-all include.path 2>/dev/null | grep -F "${toplevel}/.gitconfig-unity" >/dev/null 2>&1; then
+    git config --local --add include.path "${toplevel}/.gitconfig-unity"
+fi
 
 printf 'Configured: include.path -> %s/.gitconfig-unity\n' "${toplevel}"
 

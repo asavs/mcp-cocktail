@@ -26,7 +26,22 @@ Set-Location $root
 # superproject's .git/modules/<name>/, where ../ would miss. This does trade
 # away one thing the relative form had: it stops resolving if this clone is
 # later moved or renamed. Re-run this script if that happens.
-git config --local include.path "$root/.gitconfig-unity"
+#
+# Check-then-add, not a plain assign: `git config --local include.path X`
+# fails (exit 5, "cannot overwrite multiple values with a single value") the
+# moment two or more include.path entries already exist locally -- for any
+# reason, not just from a prior run of this script. Verified with two
+# pre-existing entries: git.exe returns 5 but does not raise a terminating
+# PowerShell error on its own (native exit codes don't respect
+# $ErrorActionPreference unless the stream is merged via 2>&1), so execution
+# would actually fall through to the misleading "Configured" line below
+# without ever having added the path, then fail later at the driver check
+# with a confusing message. --get-all plus -notin keeps this idempotent
+# without touching values that aren't ours.
+$existing = @(git config --local --get-all include.path 2>$null)
+if ("$root/.gitconfig-unity" -notin $existing) {
+    git config --local --add include.path "$root/.gitconfig-unity"
+}
 Write-Host "Configured: include.path -> $root/.gitconfig-unity"
 
 $driver = git config --get merge.unityyamlmerge.driver

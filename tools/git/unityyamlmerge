@@ -173,7 +173,12 @@ if [ -n "${TOOL}" ]; then
     # ZZTHEIRSZZ present. Keep a copy so that is recoverable.
     _snap=""
     if _snap=$(mktemp 2>/dev/null); then
-        cp "${OURS}" "${_snap}" 2>/dev/null || _snap=""
+        if ! cp "${OURS}" "${_snap}" 2>/dev/null; then
+            # mktemp already created the file; drop it rather than leaking it
+            # on the cp failure path.
+            rm -f "${_snap}"
+            _snap=""
+        fi
     else
         _snap=""
     fi
