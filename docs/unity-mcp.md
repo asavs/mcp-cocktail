@@ -60,7 +60,11 @@ unity mcp configure --list     # all supported clients
 
 For Claude Code this **delegates** rather than writing a file itself — it shells
 out to `claude mcp add --scope user --transport stdio unity-editor-mcp unity mcp -- --project-path <repo>`
-and modifies `~/.claude.json`. Note that's **user scope with a hardcoded project
+and modifies `~/.claude.json`. That inner command is reproduced **as the CLI
+emits it**, not as something to copy: its `--` lands after `unity mcp` rather
+than before it, where convention would put it. It works — the resulting entry
+is `{"command": "unity", "args": ["mcp", "--project-path", "<repo>"]}` — but
+type the conventional form if you're running it by hand. Note that's **user scope with a hardcoded project
 path**: global across your machine but pinned to this project. Re-scope it if
 you work on more than one Unity project.
 

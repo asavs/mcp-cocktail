@@ -173,6 +173,15 @@ in [docs/unity-cli.md](docs/unity-cli.md) and
   `claude mcp add --scope user --transport stdio unity-editor-mcp unity mcp -- --project-path <repo>`
   and modifies `~/.claude.json`.
 
+  That inner command is quoted **as the CLI emits it**, not as a form to copy.
+  Its `--` sits after `unity mcp` rather than before, which is unusual — the
+  conventional placement is `... unity-editor-mcp -- unity mcp --project-path`.
+  Both work, and this one demonstrably did: it produced
+  `{"command": "unity", "args": ["mcp", "--project-path", "<repo>"]}`, which is
+  the registration this project has been driving the editor through. Recorded
+  verbatim on purpose; if you're typing it yourself, prefer the conventional
+  placement.
+
 - Note it lands at **user scope with a hardcoded `--project-path`**. That means
   it's global across all your projects but pinned to this one. If you work on
   more than one Unity project, consider re-scoping it to the project instead.
