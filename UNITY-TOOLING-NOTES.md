@@ -144,6 +144,35 @@ See issue #1 for the full write-up. Key findings:
   mergetool form; pasting it into a `[merge "..."]` section yields a driver
   that runs but silently discards one side's edits. Cost an hour.
 
+- **Git hands the driver temp filenames, not working-tree paths — so don't
+  reason about quoting, measure it.** Two separate attempts here concluded
+  that unquoted `%O %B %A` corrupts merges for paths containing spaces, both
+  by *simulating* git's substitution into a shell string. Git doesn't do that.
+  Logged the real arguments with a stub driver:
+
+  ```
+  ARGC=4
+    [1]=<.merge_file_kfnwrn>
+    [2]=<.merge_file_CEZhVD>
+    [3]=<.merge_file_GHqbSY>
+    [4]=<.merge_file_GHqbSY>
+  ```
+
+  Generated names, no spaces possible, and `%A` is a temp file too — not the
+  path of the file being merged. `git mergetool` *does* pass real paths in
+  `$BASE`/`$MERGED`, and passes them intact even unquoted: a conflict in
+  `Assets/Core/TestScenes/[BB] Core.unity` arrived as four arguments with the
+  space preserved, not eight.
+
+  Both forms work. The point is the method: a stub driver that logs `"$@"`
+  answers this in one merge, and simulating the substitution answers a
+  different question convincingly enough to be believed twice.
+
+- **Bare double quotes in a git config value are stripped.** `driver = ...
+  "%O"` is stored as `... %O`; you need `\"%O\"` for the shell to see quotes.
+  Read the value back with `git config --get` rather than trusting the file —
+  the two differ, and the file is the one that lies.
+
 - **Partial config is a footgun.** With *no* `merge.unityyamlmerge.*` keys, git
   silently falls back to a text merge. With *any* key present but no `.driver`,
   every merge of a Unity asset dies with

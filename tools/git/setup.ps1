@@ -40,11 +40,24 @@ Write-Host "Merge driver: $driver"
 # PATH, so resolve it next to git.exe rather than assuming a bare `sh` works.
 # Git itself invokes the driver through its own shell, so a failure to probe
 # here says nothing about whether merging works -- report, never fail.
-$sh = Get-Command sh -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+# -CommandType Application matters: plain `Get-Command git` also matches a
+# function or alias named git, which plenty of shells and profiles define. For
+# those, .Source is empty, and Split-Path on an empty string raises a
+# ParameterBindingValidationException -- terminating, because this script sets
+# 'Stop' above. So a wrapper function around git would crash setup outright.
+# Asking for an Application, and reading .Path rather than .Source, resolves
+# the real executable regardless. Guard the null too, for a machine with no
+# git on PATH at all.
+$sh = Get-Command sh -CommandType Application -ErrorAction SilentlyContinue |
+    Select-Object -First 1 -ExpandProperty Path
 if (-not $sh) {
-    $gitDir = Split-Path (Split-Path (Get-Command git).Source)   # ...\Git\cmd -> ...\Git
-    foreach ($candidate in @("$gitDir\bin\sh.exe", "$gitDir\usr\bin\sh.exe")) {
-        if (Test-Path $candidate) { $sh = $candidate; break }
+    $gitCmd = Get-Command git -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($gitCmd) {
+        $gitDir = Split-Path (Split-Path $gitCmd.Path)   # ...\Git\cmd -> ...\Git
+        foreach ($candidate in @("$gitDir\bin\sh.exe", "$gitDir\usr\bin\sh.exe")) {
+            if (Test-Path $candidate) { $sh = $candidate; break }
+        }
     }
 }
 
