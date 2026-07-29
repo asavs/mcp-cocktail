@@ -520,7 +520,24 @@ See issue #1 for the full write-up. Key findings:
 
 Newest first.
 
-### 2026-07-28 — initial setup (Claude / Opus 5)
+### 2026-07-29 — permission tiers, and an ask-vs-allow anomaly (Claude / Fable 5)
+
+Restructured `.claude/settings.json` around Claude Code's documented rule
+precedence (PR #7): rules evaluate deny → ask → allow across every settings
+file, first match wins — which would make a committed `ask` rule
+un-overridable by a personal `allow`, and would mean "always allow" at such a
+prompt writes a local rule that never fires. Trimmed the ask list to the
+arbitrary-code class accordingly; opt-ins moved to
+`settings.local.json.example`.
+
+Then tried to verify the claim live and couldn't: with `Bash(npm view *)` in
+the project `ask` list and the same pattern in the user-level `allow` list,
+`npm view` ran twice with no prompt (Claude Code 2.1.220). `[unverified]`
+which explanation holds — mid-session reload semantics for edited rule
+arrays, the session's permission mode, or the docs being wrong. Issue #8 has
+the full protocol for the clean fresh-session experiment. The tier design
+doesn't depend on the answer: a minimal ask list plus unlisted-by-default
+opt-ins is correct under either semantics.
 
 Installed CLI 1.0.0-beta.3 and editor 6.5.5f1 from scratch on a clean Windows
 box; cloned this repo; configured the merge driver; registered the MCP server.
