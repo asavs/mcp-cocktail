@@ -520,6 +520,13 @@ See issue #1 for the full write-up. Key findings:
 
 Newest first.
 
+### 2026-08-04 — CoplayDev structured script edits can drop signature indentation
+
+- Unity Editor `6000.5.5f1`, `com.coplaydev.unity-mcp` `v10.0.0`: observed
+  `script_apply_edits` with `replace_method` and `insert_method` preserve the
+  supplied method body indentation but place the method signature at column 1.
+  The generated C# remains valid, but formatting needs a follow-up text edit.
+
 ### 2026-07-29 — permission tiers, and an ask-vs-allow anomaly (Claude / Fable 5)
 
 Restructured `.claude/settings.json` around Claude Code's documented rule
