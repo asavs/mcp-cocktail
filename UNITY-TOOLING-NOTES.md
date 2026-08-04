@@ -567,3 +567,16 @@ Left uncommitted at the time: `Packages/manifest.json` gained `com.unity.pipelin
 0.4.0-exp.1`. Deliberately kept off the PR #2 branch — adding an experimental
 package to a shared project should be its own decision. (Committed shortly
 after, on this branch, in `86d8a71`; see `docs/unity-mcp.md`.)
+
+### 2026-08-03 — direct Unity batch-mode testing on Windows
+
+- Unity Editor `6000.5.5f1`: supplying `-quit` together with `-runTests` caused
+  the Editor to compile successfully and exit with code 0 without running the
+  requested EditMode tests or writing the `-testResults` XML. Removing `-quit`
+  let the Test Framework own shutdown and produced the expected XML (11 tests,
+  all passed in the observed run).
+- A direct PowerShell invocation of `Unity.exe` returned control while the
+  batch Editor process continued importing a fresh Library. `Start-Process
+  -Wait -WindowStyle Hidden` kept the shell attached. Verify the actual process,
+  log completion marker, and filesystem effects rather than trusting the first
+  shell return.
