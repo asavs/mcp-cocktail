@@ -278,19 +278,23 @@ Treat these as three separate states:
 
 The green client row in the Unity window proves only the first state. The
 `Session Active` row proves the editor bridge is connected. To check the HTTP
-listener without an MCP client:
+listener without an MCP client, use the server's **own** health endpoint:
 
 ```powershell
-try {
-  Invoke-WebRequest http://127.0.0.1:8080/mcp -Method Get -TimeoutSec 5
-} catch {
-  [int]$_.Exception.Response.StatusCode
-}
+(Invoke-WebRequest http://127.0.0.1:8080/health -TimeoutSec 5).StatusCode   # 200 == healthy
 ```
 
-An HTTP `406` is a healthy result for this deliberately incomplete GET: the
-server is reachable but expects an MCP-compatible `Accept` header. Connection
-refused or a timeout means **Start Server** is needed in the Unity window.
+`200` is the healthy result. Connection refused or a timeout means **Start Server** is
+needed in the Unity window.
+
+> `[corrected]` An earlier revision of this section probed `GET /mcp` and called an HTTP
+> `406` "a healthy result". It is not a health check — `406` only proves *something* is
+> listening on the port and is picky about `Accept` headers, which any of several processes
+> could be. `/health` is the check CoplayDev's own CLI uses:
+> `cli/utils/connection.py` builds `http://{host}:{port}/health` and treats
+> `status_code == 200` as connected. Source-confirmed against `mcpforunityserver 10.0.0`
+> in the local `uv` cache. The same module exposes `GET /api/instances`, which is a
+> stronger check still — it answers "listening" *and* "an Editor is attached."
 
 **Agent startup handshake.** Once CoplayDev tools are loaded, read these
 resources before invoking them:

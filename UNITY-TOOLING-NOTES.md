@@ -16,6 +16,7 @@ in [docs/unity-cli.md](docs/unity-cli.md) and
 
 - [How to contribute](#how-to-contribute)
 - [Environment these notes were taken against](#environment-these-notes-were-taken-against)
+- [**Patterns**](#patterns) — the five recurring shapes. Read this first; the rest is instances.
 - **Unity CLI**
   - [Install](#install)
   - [Reliability / ergonomics](#reliability--ergonomics) — the confident-wrong-answer failures
@@ -39,6 +40,24 @@ in [docs/unity-cli.md](docs/unity-cli.md) and
 - If a later version fixes something, don't delete the entry — mark it
   `[fixed in X]`. The history is the point.
 - Anything worth sending upstream, tag `[feedback]` so it's easy to collect.
+  (Historically only 16 of 52 findings ever carried this tag, so **do not use it as a
+  selector** when collecting for upstream — read the sections.)
+
+**One finding, one home.** The same trap is currently written out in full in two or three
+files, and the copies drift: three of them were corrected in one place and left wrong in
+another for over a week. So:
+
+| Kind of thing | Lives in | Everything else |
+|---|---|---|
+| A recurring **shape** across several findings | [Patterns](#patterns), this file | links to it |
+| An **observation** — a quirk, trap, version-specific behaviour | the relevant section of this file | links to it |
+| A **verdict** — which arm to use, and why | [tooling-scorecard.md](docs/tooling-scorecard.md) | links to it |
+| A **setup step** — how to stand the thing up | [unity-cli.md](docs/unity-cli.md) / [unity-mcp.md](docs/unity-mcp.md) | links to it |
+
+Restating a finding elsewhere is fine when the reader needs it inline; **restating the
+evidence is not.** Give the one-line version and link to the home. If you correct a
+finding, search the other files for a copy before you close the loop — the copy is what the
+next agent will read.
 
 ## Environment these notes were taken against
 
@@ -48,6 +67,127 @@ in [docs/unity-cli.md](docs/unity-cli.md) and
 | Unity Editor | `6000.5.5f1` (Unity 6.5, stream: SUPPORTED) |
 | OS | Windows 11, PowerShell 5.1 + Git Bash |
 | MCP | `unity mcp` (official, via CLI) registered as `unity-editor-mcp` |
+
+---
+
+## Patterns
+
+The rest of this file is instances. This section is the shapes they fall into.
+
+A shape earns a name at **three instances**; below that it is a coincidence and stays
+where it was observed. Each pattern gives the general rule and what to do instead — the
+point is that the *next* instance costs nothing rather than being solved from scratch.
+
+Instances are listed by pointer, not restated. If you add one, add it here too; a pattern
+that stops accumulating instances stops being evidence.
+
+### P1 — reads-once-at-startup
+
+> **A process reads its ambient state once, when it starts. Changing that state around a
+> running process does nothing. Restart the process.**
+
+The symptom is always the same and always misleading: the change is correct, the tool
+reports it is not there, and every retry/refresh/reload confirms the tool.
+
+| # | Instance | Where |
+|---|---|---|
+| 1 | `uv` must be on the Editor's PATH **at launch**; installing it while Unity runs leaves `uv not found in PATH` forever, and the window's Refresh does not help | [CoplayDev](#coplaydev-mcp-for-unity-comcoplaydevunity-mcp) |
+| 2 | An MCP client fixes its tool list when it connects. A client started before the server was listening exposes zero tools even though the server returns all of them over raw HTTP | [unity-mcp.md](docs/unity-mcp.md#verify-and-recover) |
+| 3 | The Editor snapshots its **cloud access token** at startup. `unity auth login` against a running Editor never reaches it; `Project Settings > Services` stays signed out, which reads as *"I need Unity Hub"*. It does not. Order is `unity auth login` **then** launch the Editor | [Log 2026-08-05](#2026-08-05--a-fourth-confident-wrong-answer-a-startup-snapshot-pattern-and-a-version-audit) |
+| 4 | Windows GUI processes inherit a **snapshot of the user PATH** at launch. Claude Code started before the `unity` CLI was installed reports `Connection closed` for a healthy server, because the bare `unity` in the registration cannot resolve | [unity-mcp.md](docs/unity-mcp.md#setup) |
+| 5 | Unity does not resolve a `Packages/manifest.json` change made while it is running — `hasPipelinePackage: true`, `isReachable: false`, indefinitely | [Sequencing gotcha](#sequencing-gotcha-cost-us-two-restarts) |
+| 6 | **Claude Code snapshots its own hook configuration at session start.** A hook added to `.claude/settings.json` mid-session is not armed until a new session. Confirmed in the 2.1.222 binary: the startup path emits `setup_hooks_snapshot_ms` / `setup_hooks_captured` immediately after `setcwd` | `[source-confirmed, behaviour untested]` |
+
+**The exception that proves the rule:** Unity's Pipeline MCP server *does* re-enumerate its
+tools when Pipeline comes up late, so a client that connected first picks up all 140 on its
+own. That repairs a missing *server*, not a stale *PATH* — instance 4 still requires a
+restart. Do not generalise the exception.
+
+**What to do instead.** Before blaming a config, ask what was running when it changed.
+Set the ambient state first, then start the process — PATH, auth, packages, hooks, all of
+it. When a tool insists something absent is present (or vice versa) and the config is
+demonstrably right, restart before investigating further.
+
+### P2 — the confident wrong answer
+
+> **The `unity` CLI's defining failure mode is a plausible answer, not an error. Verify
+> through a channel the tool does not own.**
+
+Four instances, all in the same tool, none of which announced itself:
+
+| # | Instance | Where |
+|---|---|---|
+| 1 | `unity editors running` listed **both** PIDs as having the project open when only one did | [Reliability](#reliability--ergonomics) |
+| 2 | Path-less `unity open` silently launches a **second** bare Editor on the project picker rather than erroring | [Reliability](#reliability--ergonomics) |
+| 3 | `unity pipeline list` resolves **cwd** as the project and invents a row — reported a "project" at `C:\Users\asas` with `Running: true` | [Reliability](#reliability--ergonomics) |
+| 4 | `unity pipeline list --json` reported `isRunning: true` with zero `Unity.exe` processes, nothing bound on 7800-7810, and no `Library/EditorInstance.json` | [Log 2026-08-05](#2026-08-05--a-fourth-confident-wrong-answer-a-startup-snapshot-pattern-and-a-version-audit) |
+
+**What to do instead.** Cross-check liveness against something the CLI does not produce:
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='Unity.exe'" | Select ProcessId, CommandLine
+Get-NetTCPConnection -State Listen | ? LocalPort -eq 7800
+Test-Path .\Library\EditorInstance.json
+```
+
+Always `cd` to the project (or pass an explicit path) first. Use `--json` and read the
+**narrowest honest field** — `pipelineServer.isReachable`, not `isRunning`, and never the
+human table, which has several boolean-looking columns a loose grep will match wrongly.
+
+### P3 — termination is not completion, and completion is not termination
+
+> **Exit and success are uncorrelated in this toolchain, in both directions. Bound every
+> call with a timeout and assert on the side effect.**
+
+| # | Instance | Where |
+|---|---|---|
+| 1 | `unity mcp configure` writes `~/.claude.json` correctly, prints its confirmation, and then never exits | [Unity MCP](#unity-mcp) |
+| 2 | `unity license --help` hangs even with `--non-interactive`; several other commands exceed 120s and finish fine when given longer | [Reliability](#reliability--ergonomics) |
+| 3 | `UnityYAMLMerge` with no subcommand blocks indefinitely — to a terminal, redirected, and with `-h`. On a parse error it raises a **modal dialog** and waits, with git stuck behind it | [Git / UnityYAMLMerge](#git--unityyamlmerge) |
+| 4 | A direct `Unity.exe` batch invocation **returns control** while the Editor keeps importing a fresh `Library` | [Log 2026-08-03](#2026-08-03--direct-unity-batch-mode-testing-on-windows) |
+| 5 | `-quit` together with `-runTests` **exits 0** having compiled, run no tests, and written no results XML | [Log 2026-08-03](#2026-08-03--direct-unity-batch-mode-testing-on-windows) |
+| 6 | `unity --help` and `unity editors info` return **255** while printing correct output | [Reliability](#reliability--ergonomics) |
+
+**What to do instead.** Never gate on exit status. Give every invocation a generous timeout
+(60s+ is normal; `tools/git/unityyamlmerge` bounds its call at 300s and reports a killed
+merge as a conflict). Then assert on the artefact — the file that should have changed, the
+port that should be bound, the XML that should exist.
+
+### P4 — the green light that proves only the first of several states
+
+> **A status field is evidence about its own layer and nothing above it. Name the states
+> separately and check the last one.**
+
+| # | Instance | Where |
+|---|---|---|
+| 1 | `claude mcp list` says `✓ Connected` while the server exposes **zero tools** — it is connected; it just has nothing to offer without `com.unity.pipeline` | [Unity MCP](#unity-mcp) |
+| 2 | `hasPipelinePackage: true` with `isReachable: false` — the manifest entry exists, the Editor never resolved it | [Sequencing gotcha](#sequencing-gotcha-cost-us-two-restarts) |
+| 3 | CoplayDev's green client row proves only **configured**. Separately: listening, and loaded by the client | [unity-mcp.md](docs/unity-mcp.md#verify-and-recover) |
+| 4 | `isRunning: true` with `isReachable: false` and no Editor at all — see P2/4 | [Log 2026-08-05](#2026-08-05--a-fourth-confident-wrong-answer-a-startup-snapshot-pattern-and-a-version-audit) |
+
+Every intermediate broken state in this stack reports success *somewhere*. That is what
+makes an out-of-order setup look like a broken install.
+
+**What to do instead.** Write down the states before diagnosing — for an MCP server they are
+**configured → listening → loaded**, and only the last one is what you wanted. Then find the
+check that speaks to the last one: `unity list` for arm B (its error names all three
+prerequisites, and it is the benchmark for what a good error looks like), `GET /health`
+for arm C.
+
+### P5 — the argument that is accepted and then ignored
+
+> **A write that does not echo the resulting state has not been verified. Read it back.**
+
+| # | Instance | Where |
+|---|---|---|
+| 1 | CoplayDev `manage_gameobject action=create` accepts `component_properties`, returns `"success": true`, adds the component, and leaves the property at its default. Source-confirmed: the create path never reads it | [scorecard T-001](docs/tooling-scorecard.md#t-001--build-the-same-gameobject-hierarchy-through-each-arm) |
+| 2 | CoplayDev `set_property` returns only `{"instanceID": ...}` — no value — so a failed write is indistinguishable from a successful one | [scorecard](docs/tooling-scorecard.md#standing-observations) |
+| 3 | A `[merge "unityyamlmerge"]` section with **any** key but no `.driver` kills every Unity-asset merge; with *no* keys git silently falls back to a text merge. Neither state is announced | [Git / UnityYAMLMerge](#git--unityyamlmerge) |
+| 4 | Bare double quotes in a git config value are **stripped** on write — `git config --get` and the file on disk disagree, and the file is the one that lies | [Git / UnityYAMLMerge](#git--unityyamlmerge) |
+
+**What to do instead.** Prefer the arm whose mutating calls echo state (arm B does; arm C
+does not). Where you cannot, make the read-back a step of the operation rather than an
+optional check — and read it from a different surface than the one you wrote through.
 
 ---
 
@@ -196,8 +336,11 @@ in [docs/unity-cli.md](docs/unity-cli.md) and
   return. Anything scripting the CLI needs a timeout and should verify the
   side effect rather than wait on exit.
 
-- Registering mid-session does not expose the tools to an already-running agent
-  session — restart to pick them up.
+- Registering a **new server** mid-session does not expose its tools to an
+  already-running agent session — restart to pick them up. ([P1](#p1--reads-once-at-startup))
+  This is a different case from an *already-registered* server whose Pipeline comes up
+  late, which needs no client restart; see the
+  [sequencing gotcha](#sequencing-gotcha-cost-us-two-restarts).
 
 - **`[feedback]` "Connected" does not mean "usable".** `claude mcp list` reports
   `✓ Connected` and the client restart exposes **zero tools**, with nothing
@@ -520,6 +663,71 @@ See issue #1 for the full write-up. Key findings:
 
 Newest first.
 
+### 2026-08-05 (later) — a pattern layer, a corrected health check, and a retrieval measurement
+
+**A `/health` endpoint exists on CoplayDev's server, and the `406` advice was wrong.**
+`docs/unity-mcp.md` told readers to `GET /mcp` and treat HTTP `406` as healthy. `406` only
+proves *something* is listening and is picky about `Accept` headers. CoplayDev's own CLI
+checks health properly: `cli/utils/connection.py` builds `http://{host}:{port}/health` and
+treats `status_code == 200` as connected, and the same module reads `GET /api/instances`,
+which additionally proves an Editor is attached. Source-confirmed against
+`mcpforunityserver 10.0.0` as installed in the local `uv` cache. Corrected in place.
+
+**`[feedback]` The Unity-side CoplayDev package has no `/health` route of its own.**
+`HealthStatus.cs` defines `Healthy`/`Unhealthy` string constants for the Editor window's
+own UI only. The HTTP health surface lives entirely in the Python server, so a diagnosis
+that starts from the Unity package finds a health *concept* with no endpoint behind it.
+
+**Claude Code snapshots its hook configuration at session start.** Confirmed in the
+`2.1.222` binary: the startup path emits `setup_hooks_snapshot_ms` / `setup_hooks_captured`
+immediately after `setcwd`, before the file watcher is installed. So a hook added to
+`.claude/settings.json` mid-session is not armed until a new session — a sixth instance of
+[P1](#p1--reads-once-at-startup), and one that applies to the tooling *around* this repo
+rather than inside it. `[source-confirmed, runtime behaviour untested]`
+
+**Duplicated findings drift, and the drift is one-directional.** Three findings were
+corrected in one file and left wrong in another for over a week — the confident-wrong-answer
+count (three in `docs/unity-cli.md`, four here), the duplicate-`instanceId` claim (marked
+not-reproduced here, still asserted as a standing verdict in the scorecard), and
+`mcp-for-unity-server 3.4.5` (corrected here, still in the scorecard's comparison table).
+In every case the stale copy sat in the file a reader is *directed* to. Corrected, and the
+[one finding, one home](#how-to-contribute) convention added so the next correction has a
+defined place to propagate to.
+
+**Retrieval measured, and the number is worse than the design assumed.** Sampled the
+longest available multi-goal session (2026-08-05, ~19h wall clock, 38 human turns, 462 tool
+calls, driving this Editor throughout): **the record was never opened. Not once.** Not in a
+tool call, not in prose. It was present in that checkout the whole time. `AGENTS.md` and
+the scorecard predate the session; `UNITY-TOOLING-NOTES.md` landed in `main` about an hour
+into it.
+
+Documented traps hit before consulting: **0**, upper bound **1**. Not because the session
+was well-informed — because the record and the session barely overlapped. The record is
+overwhelmingly about the `unity` CLI; that session invoked the CLI **zero times** across 88
+shell calls and reached the Editor entirely through arm B. Against thirteen novel traps it
+paid full price for (degenerate humanoid Avatars from `ModelImporter.globalScale`, an
+asmdef silently dropping scripts from the build with no console error, `text=auto` eating
+bytes from a 27 MB binary `.asset`, `.unitypackage` dependency export dragging in the URP
+shader tree), the rediscovered-to-novel ratio was roughly **1:13**.
+
+Two things follow, and the second is the uncomfortable one. Retrieval genuinely is not
+automatic — nineteen hours, no consult. But the record's *coverage* is the binding
+constraint before its retrieval is: a forcing function that had fired perfectly on turn 1
+would have saved this session almost nothing. The corollary is that the one trap class it
+does hit — [P2](#p2--the-confident-wrong-answer), verify the effect rather than the tool's
+confident report — recurred three times in forms the record does not name, because it is
+written as a `unity`-CLI quirk rather than as a general rule. That is what the
+[Patterns](#patterns) section is for.
+
+**Mechanism built, not wired.** `tools/agent/unity-trap-check.py` is a `PreToolUse` hook
+that matches the tool call and injects the relevant finding via
+`hookSpecificOutput.additionalContext` before the call runs. 17 rules, each citing a
+finding already in this file; narrow triggers fire every time, broad ones at most hourly,
+and it never blocks or denies. `--selftest` runs the rule set against fixtures including
+the false-positive that matters (a `cd` into a path containing "unity"). Wiring it requires
+an edit to `.claude/settings.json`, which is deliberately left to a human — the fragment is
+in the script's header.
+
 ### 2026-08-05 — a fourth confident-wrong-answer, a startup-snapshot pattern, and a version audit
 
 Versions at time of writing: CLI `1.0.0-beta.3`, Editor `6000.5.5f1`, Pipeline
@@ -672,9 +880,16 @@ Not yet exercised: the MCP tool surface itself (registered but not used), and
 ### 2026-07-28 (later) — getting the MCP servers actually working
 
 Chased down why `unity-editor-mcp` reported `✓ Connected` while exposing zero
-tools: it needs `com.unity.pipeline` in the project, an Editor restart to
-resolve it, and then a *second* MCP-client restart to re-enumerate. Documented
-the full ordering above.
+tools: it needs `com.unity.pipeline` in the project and an Editor restart to
+resolve it. Documented the full ordering above.
+
+`[corrected]` — this entry originally added "and then a *second* MCP-client restart to
+re-enumerate." That is wrong and contradicted the
+[sequencing gotcha](#sequencing-gotcha-cost-us-two-restarts), which is the canonical
+statement: the server re-enumerates on its own when Pipeline comes up, and only the
+**Editor** restart is required. A client restart *is* required for the distinct case of a
+stale PATH snapshot ([P1](#p1--reads-once-at-startup)/4) — which is what made the two
+readings look compatible for a week.
 
 Confirmed Unity's official surface is **140 tools** with a genuinely
 well-considered safety model (confirm flags, authoring-root confinement,

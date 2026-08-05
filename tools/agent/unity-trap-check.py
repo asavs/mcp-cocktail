@@ -1,0 +1,377 @@
+#!/usr/bin/env python3
+"""PreToolUse hook: surface the known trap for a Unity tool at the moment it is reached for.
+
+Why this exists
+---------------
+The tooling record is good and gets read too late. On a scoped task an agent finds it
+unaided; in a long multi-goal session it is not opened until after the cost is paid. A
+session-start pointer does not fix that — it is exactly the thing that already works.
+So the trigger has to be the tool call itself.
+
+Every rule below cites a finding that already exists in the record. This file adds no new
+claims; it is a retrieval mechanism, not a second copy of the notes. If a rule and the
+record disagree, the record is right and this file is stale.
+
+Wiring (NOT applied — a human should review and apply this)
+-----------------------------------------------------------
+Add to `.claude/settings.json`. Hooks are captured in a snapshot at session start
+(`setup_hooks_captured`), so this does not arm until a **new session** — which is itself
+an instance of P1, reads-once-at-startup.
+
+    "hooks": {
+      "PreToolUse": [
+        {
+          "matcher": "Bash|PowerShell|mcp__unity-editor-mcp__.*|mcp__UnityMCP__.*|mcp__unityMCP__.*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "python \"$CLAUDE_PROJECT_DIR/tools/agent/unity-trap-check.py\"",
+              "timeout": 10
+            }
+          ]
+        }
+      ]
+    }
+
+Contract
+--------
+stdin  : the PreToolUse event JSON — `tool_name`, `tool_input`, `session_id`, `cwd`.
+stdout : `{"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                  "additionalContext": "..."}}` when a rule matches.
+exit   : always 0. This hook never blocks a call and never denies one. It has no opinion
+         about whether the call is allowed; it only makes sure the relevant finding is in
+         context before the result comes back.
+
+A hook that guesses wrong and blocks is worse than no hook. A hook that is noisy gets
+tuned out, which is the same as not existing — hence `cooldown_s` per rule: narrow,
+high-precision triggers fire every time; broad ones fire at most hourly.
+
+Verify effects, not exit codes — including this file's. `--selftest` runs the rule set
+against fixtures.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+import time
+
+NOTES = "UNITY-TOOLING-NOTES.md"
+
+# (id, cooldown_s, tool-name regex or None, command regex or None, message)
+# cooldown_s = 0  -> fire on every match (trigger is specific enough to always be relevant)
+# cooldown_s > 0  -> fire at most that often per session (trigger is broad)
+RULES: list[tuple[str, int, str | None, str | None, str]] = [
+    # ---- P2: the confident wrong answer -------------------------------------------------
+    (
+        "cli-open-no-path", 0, r"^(Bash|PowerShell)$",
+        r"\bunity\s+open\s*(?:$|[|;&\n])",
+        "P2 — `unity open` with no path does NOT resolve the cwd. It launches a second, "
+        "bare Editor on the project picker and reports no error. Pass an explicit path. "
+        f"({NOTES}#p2--the-confident-wrong-answer)",
+    ),
+    (
+        "cli-editors-running", 0, r"^(Bash|PowerShell)$",
+        r"\bunity\s+editors\s+running\b",
+        "P2 — `unity editors running` has misreported which instance has the project open, "
+        "listing both PIDs. Cross-check against the process command lines: "
+        "`Get-CimInstance Win32_Process -Filter \"Name='Unity.exe'\" | Select ProcessId, CommandLine`. "
+        f"({NOTES}#p2--the-confident-wrong-answer)",
+    ),
+    (
+        "cli-pipeline-list", 0, r"^(Bash|PowerShell)$",
+        r"\bunity\s+pipeline\s+list\b",
+        "P2 — `unity pipeline list` resolves the CURRENT DIRECTORY as the project and "
+        "invents a row when there isn't one; it has also reported `isRunning: true` with no "
+        "Editor process, nothing bound on :7800, and no Library/EditorInstance.json. "
+        "`cd` to the project first, use `--json`, and read `pipelineServer.isReachable` — "
+        "not `isRunning`, and never the human table (two boolean-ish columns; a loose grep "
+        f"matches the wrong one). ({NOTES}#p2--the-confident-wrong-answer)",
+    ),
+    # ---- P1: reads-once-at-startup ------------------------------------------------------
+    (
+        "cli-auth-login", 0, r"^(Bash|PowerShell)$",
+        r"\bunity\s+auth\s+login\b",
+        "P1 — the Editor snapshots its cloud access token AT STARTUP. If an Editor is "
+        "already running this login will never reach it; Project Settings > Services stays "
+        "signed out and reads as 'I need Unity Hub'. It does not. Order is `unity auth "
+        f"login` THEN launch the Editor. ({NOTES}#p1--reads-once-at-startup)",
+    ),
+    (
+        "manifest-while-running", 0, r"^(Bash|PowerShell|Edit|Write)$",
+        r"unity\s+pipeline\s+install|Packages[\\/]manifest\.json",
+        "P1 — Unity does not resolve a `Packages/manifest.json` change made while it is "
+        "running. You will get `hasPipelinePackage: true` with `isReachable: false` "
+        "indefinitely. The Editor must be restarted, and its HTTP server binds late after "
+        f"that. ({NOTES}#p1--reads-once-at-startup)",
+    ),
+    (
+        "uv-install", 0, r"^(Bash|PowerShell)$",
+        r"(winget\s+install\s+astral-sh\.uv|\buv\s+self\s+update\b|pip\s+install\s+uv\b)",
+        "P1 — `uv` must be on the EDITOR's PATH at launch. Installing it while Unity is "
+        "running leaves the MCP window reporting `uv not found in PATH` permanently, and "
+        "its Refresh button does not help. Restart the Editor from a shell that already "
+        f"has uv, or point the window at the binary. ({NOTES}#p1--reads-once-at-startup)",
+    ),
+    # ---- P3: termination is not completion ----------------------------------------------
+    (
+        "cli-mcp-configure", 0, r"^(Bash|PowerShell)$",
+        r"\bunity\s+mcp\s+configure\b",
+        "P3 — `unity mcp configure` does its work and then NEVER EXITS. The config lands "
+        "correctly; the process just doesn't return. Give it a timeout and verify the side "
+        f"effect (~/.claude.json) rather than waiting on exit. ({NOTES}#p3--termination-is-not-completion-and-completion-is-not-termination)",
+    ),
+    (
+        "batch-runtests-quit", 0, r"^(Bash|PowerShell)$",
+        r"-runTests\b(?=[\s\S]*-quit\b)|-quit\b(?=[\s\S]*-runTests\b)",
+        "P3 — `-quit` together with `-runTests` makes the Editor compile, exit 0, run NO "
+        "tests and write no results XML. Drop `-quit` and let the Test Framework own "
+        "shutdown. Also: a direct `Unity.exe` call returns control while the batch Editor "
+        "keeps importing — use `Start-Process -Wait`. "
+        f"({NOTES}#p3--termination-is-not-completion-and-completion-is-not-termination)",
+    ),
+    (
+        "yamlmerge", 0, r"^(Bash|PowerShell)$",
+        r"UnityYAMLMerge",
+        "P3 — UnityYAMLMerge blocks on a GUI in two ways and both hang git: a modal error "
+        "dialog on unparseable input, and a fallback to whichever GUI merge tool is "
+        "installed. Pass `-h --fallback none` for any non-interactive use, and bound it "
+        "with a timeout — invoking it with no subcommand hangs regardless of `-h`. "
+        f"({NOTES}#git--unityyamlmerge)",
+    ),
+    (
+        "merge-driver-config", 0, r"^(Bash|PowerShell)$",
+        r"git\s+config[^\n]*merge\.[A-Za-z0-9_-]*\.(driver|name|recursive)",
+        "Merge-driver placeholders are `%O %B %A` — `$BASE`/`$REMOTE`/`$LOCAL` are "
+        "`git mergetool` placeholders and produce a driver that runs and silently discards "
+        "one side. Bare double quotes in a config value are stripped on write, so read it "
+        "back with `git config --get`. Partial config is fatal: any `merge.<x>.*` key "
+        f"without `.driver` kills every Unity-asset merge. ({NOTES}#git--unityyamlmerge)",
+    ),
+    # ---- Anti-capabilities: things that fail only after you have paid --------------------
+    (
+        "hierarchy-no-pagination", 0,
+        r"^mcp__unity-editor-mcp__(get_scene_hierarchy|find_gameobjects)$", None,
+        "ANTI-CAPABILITY — this tool has no depth, limit, or pagination parameter. On a "
+        "real scene in this project `get_scene_hierarchy` returned 290,642 characters / "
+        "7,883 lines and blew the client's token limit outright. If the target scene is "
+        "the OldForest one, scope the question another way (`search`, `find_assets`, or a "
+        f"specific path) before calling this. ({NOTES}#log)",
+    ),
+    (
+        "component-props-unsupported", 0,
+        r"^mcp__unity-editor-mcp__get_component_properties$", None,
+        "ANTI-CAPABILITY — `get_component_properties` cannot read common value types: it "
+        "returns the literal strings `<unsupported:Quaternion>` for `m_LocalRotation` and "
+        "`<unsupported:LayerMask>` for layer masks. If you need rotation or a layer mask, "
+        f"this call will not answer you. ({NOTES}#log)",
+    ),
+    (
+        "coplay-write-no-echo", 0,
+        r"^mcp__(UnityMCP|unityMCP)__manage_(gameobject|components|material|scriptable_object)$", None,
+        "P5 — CoplayDev writes do not echo state. `set_property` returns only "
+        "`{\"instanceID\": ...}`, and `manage_gameobject action=create` accepts "
+        "`component_properties`, returns success, and silently leaves the property at its "
+        "default (source-confirmed; there is no reachable way to set a component property "
+        "at creation time — use `action=modify` after creating). Read the state back. "
+        f"({NOTES}#p5--the-argument-that-is-accepted-and-then-ignored)",
+    ),
+    # ---- Broad, rate-limited ------------------------------------------------------------
+    (
+        "arbitrary-csharp", 3600,
+        r"^mcp__(unity-editor-mcp__eval(_file)?|UnityMCP__execute_code|unityMCP__execute_code)$", None,
+        "`eval` / `eval_file` / `execute_code` run arbitrary C# in the Editor and bypass "
+        "every `confirm=true` and `dry_run` guard the other tools have, since anything "
+        "those guards protect can be done directly from C#. This is a decision, not a "
+        "convenience. If a read-only tool can answer the question, prefer it — the known "
+        "exception is terrain introspection, which has no read-only route at all. "
+        f"({NOTES}#unity-official-the-tool-surface-once-pipeline-is-live)",
+    ),
+    (
+        "shared-editor-state", 3600,
+        r"^mcp__(unity-editor-mcp|UnityMCP|unityMCP)__(editor_play|editor_stop|editor_pause|open_scene|set_active_scene|set_selection|menu|execute_menu_item)$",
+        None,
+        "The Editor is shared with a human at the keyboard. Play mode, the open scene and "
+        "the selection are all things they are looking at right now. Confirm this was "
+        "asked for, and put it back when you are done.",
+    ),
+    (
+        "cli-general", 3600, r"^(Bash|PowerShell)$",
+        r"(?<![\w./\\-])unity(\.exe)?\s+[a-z]",
+        "`unity` CLI, general: do NOT gate on exit codes (several commands return 255 while "
+        "printing correct output), allow 60s+ (they look hung and aren't; a few `--help` "
+        "subcommands genuinely hang), prefer `--json`, and `cd` to the project first — "
+        "several commands resolve the cwd as the project. Its defining failure mode is a "
+        f"confident wrong answer rather than an error. ({NOTES}#p2--the-confident-wrong-answer)",
+    ),
+]
+
+# Fired once per session, on the first Unity-adjacent tool call of any kind.
+FIRST_TOUCH = (
+    "This project keeps a record of how the Unity tooling actually behaves, and the "
+    "measured failure is that it gets read after the cost is paid rather than before. "
+    f"The five recurring failure shapes are in {NOTES} — the Patterns section, near the "
+    "top. Two minutes, and it is the part that repeats: things read their ambient state "
+    "once at startup; the CLI answers confidently and wrongly rather than erroring; "
+    "exiting and succeeding are uncorrelated in both directions; a green light proves only "
+    "its own layer; and an argument can be accepted and then ignored."
+)
+
+UNITY_ISH = re.compile(
+    r"^mcp__(unity-editor-mcp|UnityMCP|unityMCP)__|"
+    r"^(Bash|PowerShell)$",
+)
+
+
+def state_path(session_id: str) -> str:
+    base = os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp"
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", session_id or "nosession")
+    return os.path.join(base, f"unity-trap-check-{safe}.json")
+
+
+def load_state(path: str) -> dict:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def save_state(path: str, state: dict) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(state, fh)
+    except Exception:
+        pass  # a hook that fails must not break the tool call
+
+
+def command_text(tool_input: dict) -> str:
+    parts = []
+    for key in ("command", "file_path", "path", "new_string", "content"):
+        val = tool_input.get(key)
+        if isinstance(val, str):
+            parts.append(val)
+    return "\n".join(parts)
+
+
+def evaluate(tool_name: str, tool_input: dict, state: dict, now: float) -> list[str]:
+    """Return the messages that should fire. Mutates `state`."""
+    text = command_text(tool_input)
+    fired: list[str] = []
+
+    for rule_id, cooldown, name_re, cmd_re, message in RULES:
+        if name_re and not re.search(name_re, tool_name):
+            continue
+        if cmd_re and not re.search(cmd_re, text, re.IGNORECASE):
+            continue
+        last = state.get(rule_id, 0)
+        if cooldown and (now - last) < cooldown:
+            continue
+        state[rule_id] = now
+        fired.append(message)
+
+    if UNITY_ISH.search(tool_name) and not state.get("_first_touch"):
+        # Only counts as a Unity touch if it is an MCP call or actually mentions unity/uv.
+        if tool_name.startswith("mcp__") or re.search(r"\bunity|\buv\b|UnityYAMLMerge", text, re.I):
+            state["_first_touch"] = now
+            fired.insert(0, FIRST_TOUCH)
+
+    return fired
+
+
+def main() -> int:
+    # Windows consoles default to cp1252; the messages below contain em dashes and `≥`.
+    # Without this the hook dies on UnicodeEncodeError and silently stops firing.
+    for stream in (sys.stdout, sys.stdin):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    try:
+        event = json.load(sys.stdin)
+    except Exception:
+        return 0
+
+    tool_name = str(event.get("tool_name") or "")
+    tool_input = event.get("tool_input") or {}
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+
+    path = state_path(str(event.get("session_id") or ""))
+    state = load_state(path)
+    fired = evaluate(tool_name, tool_input, state, time.time())
+    if not fired:
+        return 0
+    save_state(path, state)
+
+    body = "Known trap for this call, from the project's tooling record:\n\n" + "\n\n".join(
+        f"- {m}" for m in fired
+    )
+    json.dump(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": body[:9000],
+            }
+        },
+        sys.stdout,
+    )
+    return 0
+
+
+def selftest() -> int:
+    # expectation: "rule-id" must fire · "!rule-id" must NOT fire · None -> nothing fires
+    cases = [
+        ("Bash", {"command": "unity open"}, "cli-open-no-path"),
+        ("Bash", {"command": "unity open C:/repo"}, "!cli-open-no-path"),
+        ("Bash", {"command": "cd /c/repo && unity pipeline list --json"}, "cli-pipeline-list"),
+        ("PowerShell", {"command": "unity editors running"}, "cli-editors-running"),
+        ("Bash", {"command": "unity auth login"}, "cli-auth-login"),
+        ("Bash", {"command": "winget install astral-sh.uv"}, "uv-install"),
+        ("Bash", {"command": "unity mcp configure claude-code"}, "cli-mcp-configure"),
+        ("Bash", {"command": 'Unity.exe -batchmode -runTests -quit -projectPath .'}, "batch-runtests-quit"),
+        ("Bash", {"command": 'git config merge.unityyamlmerge.driver "x %O %B %A"'}, "merge-driver-config"),
+        ("Edit", {"file_path": "C:/repo/Packages/manifest.json"}, "manifest-while-running"),
+        ("mcp__unity-editor-mcp__get_scene_hierarchy", {}, "hierarchy-no-pagination"),
+        ("mcp__unity-editor-mcp__get_component_properties", {}, "component-props-unsupported"),
+        ("mcp__UnityMCP__manage_gameobject", {}, "coplay-write-no-echo"),
+        ("mcp__unity-editor-mcp__eval", {}, "arbitrary-csharp"),
+        ("mcp__unity-editor-mcp__editor_play", {}, "shared-editor-state"),
+        ("Bash", {"command": "unity list"}, "cli-general"),
+        ("Bash", {"command": "git status --short"}, None),
+        ("Bash", {"command": "cd /c/Users/asas/UnityProjects/third-person-multiplayer && git log"}, None),
+        ("Read", {"file_path": "C:/repo/README.md"}, None),
+    ]
+    ok = True
+    for tool_name, tool_input, expect in cases:
+        state: dict = {"_first_touch": 1}  # suppress the once-per-session banner
+        hits = []
+        text = command_text(tool_input)
+        for rule_id, cooldown, name_re, cmd_re, _msg in RULES:
+            if name_re and not re.search(name_re, tool_name):
+                continue
+            if cmd_re and not re.search(cmd_re, text, re.IGNORECASE):
+                continue
+            hits.append(rule_id)
+        if expect is None:
+            good = not hits
+        elif expect.startswith("!"):
+            good = expect[1:] not in hits
+        else:
+            good = expect in hits
+        status = "ok  " if good else "FAIL"
+        if not good:
+            ok = False
+        print(f"{status} {tool_name:48s} {str(tool_input)[:44]:46s} -> {hits or '-'}")
+    # the false-positive case that matters most: a cd into a path containing 'unity'
+    print("\nselftest", "passed" if ok else "FAILED")
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        sys.exit(selftest())
+    sys.exit(main())

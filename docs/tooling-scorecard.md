@@ -1,8 +1,14 @@
 # Tooling scorecard
 
-Which of the three arms to reach for, and the trials that justify it.
+Which arm to reach for, and the trials that justify it.
 
 Protocol: [tooling-experiment.md](tooling-experiment.md).
+Recurring failure shapes that cut across all arms:
+[Patterns](../UNITY-TOOLING-NOTES.md#patterns).
+
+> This file said "the three arms" until 2026-08-05. There are at least twelve, and two of
+> the three were not independent. The table below is the current option set; the
+> [watch-list](#watch-list) is the rest.
 
 | Arm | What it is | Status |
 |---|---|---|
@@ -81,9 +87,12 @@ Short version, with the detail living elsewhere — this file is for verdicts,
 - **B's mutating calls echo the resulting state; C's don't.** Confirmation is
   free on B and a deliberate extra read on C, whose `set_property` returns only
   an instance id. Read state back on C. T-001.
-- **Neither server's own object handles are wholly trustworthy — in opposite
-  ways.** B repeats one `instanceId` across distinct objects (use
-  `hierarchyPath`); C's ids were distinct and reliable. T-001.
+- **`[not reproduced on Pipeline 0.4.0-exp.1]`** T-001 recorded that B repeats one
+  `instanceId` across distinct objects. A re-test returned four distinct ids for four
+  distinct GameObjects. Three *components on one GameObject* did share an id while their
+  `globalId`s differed, which is a different and plausibly correct behaviour. Superseded,
+  not deleted — the T-001 entry below is left as written. `hierarchyPath` remains the
+  handle that is unambiguous by construction, so prefer it regardless.
 - **B has the better safety model** (`confirm=true`, `dry_run`, path
   confinement) — and ships `eval`/`eval_file`, which bypass all of it.
   [Detail](unity-mcp.md#security-notes).
@@ -159,7 +168,7 @@ Captured 2026-07-28. B via `unity list`; C by speaking MCP directly to
 
 | | B — Unity official | C — CoplayDev |
 |---|---|---|
-| Server | Pipeline `0.4.0-exp.1` | `mcp-for-unity-server 3.4.5` |
+| Server | Pipeline `0.4.0-exp.1` | `mcpforunityserver 10.0.0` |
 | Tools | **140** | **47** |
 | Granularity | fine-grained — `create_gameobject`, `set_parent`, `set_active` | coarse dispatchers — `manage_gameobject`, `manage_scene` + an `action` argument |
 | Arbitrary code | `eval` / `eval_file` | `execute_code` |

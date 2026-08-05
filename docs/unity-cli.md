@@ -130,12 +130,17 @@ This is the canonical account of the CLI's reliability characteristics; other
 docs link here rather than restating them.
 
 **The failure mode to design around: this CLI returns confident wrong answers
-rather than errors.** Three confirmed cases so far — `editors running`
+rather than errors.** Four confirmed cases on `1.0.0-beta.3` — `editors running`
 misreporting which instance had a project open, path-less `unity open` silently
-launching a second editor instead of erroring, and `pipeline list` inventing a
-project row from the current directory. None announced itself. Budget
-verification time, and never report success on the strength of a command
+launching a second editor instead of erroring, `pipeline list` inventing a
+project row from the current directory, and `pipeline list --json` reporting
+`isRunning: true` for a project with no Editor process at all. None announced itself.
+Budget verification time, and never report success on the strength of a command
 appearing to work.
+
+The instance list and the cross-checks that catch it are canonical in
+[P2 — the confident wrong answer](../UNITY-TOOLING-NOTES.md#p2--the-confident-wrong-answer).
+Add new instances there, not here.
 
 - **Use `--json` / `--format json`.** Output is consistent and genuinely
   machine-readable. Parsing the human tables is a trap — several have multiple

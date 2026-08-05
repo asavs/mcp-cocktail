@@ -1,17 +1,28 @@
-# The three-way tooling experiment
+# The tooling experiment
 
-We have three ways to make Unity do things, and no principled basis yet for
-choosing between them. This is how we build one.
+There are many ways to make Unity do things and no principled basis yet for choosing
+between them. This is how we build one.
+
+Three of those ways are in use here and are the arms this protocol was written around.
+The full, corrected option set — including the ones not in use — lives in the
+[scorecard](tooling-scorecard.md); [Is the option set still complete?](#is-the-option-set-still-complete)
+at the bottom of this file is why that distinction matters.
 
 | Arm | What it is | Doc |
 |---|---|---|
 | **A — CLI** | `unity` shell commands | [unity-cli.md](unity-cli.md) |
 | **B — MCP official** | `mcp__unity-editor-mcp__*` (Unity Pipeline) | [unity-mcp.md](unity-mcp.md#unity-official) |
-| **C — MCP CoplayDev** | `mcp__unityMCP__*` (MCP for Unity) | [unity-mcp.md](unity-mcp.md#coplaydev-mcp-for-unity) |
+| **C — MCP CoplayDev** | MCP for Unity — tool prefix is **per client**; Claude Code sees `mcp__UnityMCP__*`, Codex sees `mcp__unityMCP__*` | [unity-mcp.md](unity-mcp.md#coplaydev-mcp-for-unity) |
 
-**The method:** when you take on a substantial task, run it three times in
+**⚠️ A and B are one stack.** `unity mcp` is an MCP front-end over the same
+`com.unity.pipeline` HTTP API that `unity list` uses, so they fail together. Treating a
+task as covered because "two arms can do it" is wrong whenever those two are A and B.
+
+**The method:** when you take on a substantial task, run it more than once in
 parallel — one subagent per arm, each blind to the others — then compare. The
-comparison is the point; the task getting done is a by-product.
+comparison is the point; the task getting done is a by-product. A full N-arm blind trial
+is the top tier of evidence and is not the only admissible tier; see
+[Evidence tiers](#evidence-tiers).
 
 Results go in [tooling-scorecard.md](tooling-scorecard.md). Qualitative
 surprises go in [../UNITY-TOOLING-NOTES.md](../UNITY-TOOLING-NOTES.md).
