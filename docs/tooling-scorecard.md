@@ -2,9 +2,39 @@
 
 Which of the three arms to reach for, and the trials that justify it.
 
-Protocol: [tooling-experiment.md](tooling-experiment.md). Arms: **A** = `unity`
-CLI, **B** = MCP official (`mcp__unity-editor-mcp__*`), **C** = MCP CoplayDev
-(`mcp__unityMCP__*` — but see below).
+Protocol: [tooling-experiment.md](tooling-experiment.md).
+
+| Arm | What it is | Status |
+|---|---|---|
+| **A** | `unity` CLI | in use |
+| **B** | MCP official — `com.unity.pipeline`, `mcp__unity-editor-mcp__*` | in use |
+| **B2** | `com.unity.ai.assistant`'s own relay MCP — a *different* first-party server | ⚠️ do not install on 6.5 |
+| **C** | MCP CoplayDev — `com.coplaydev.unity-mcp`, `mcp__unityMCP__*` (but see below) | in use |
+| **D** | [IvanMurzak/Unity-MCP](https://github.com/IvanMurzak/Unity-MCP) — C#/.NET, npm CLI, Apache-2.0 | untested, credible |
+| — | eight further credible entrants | untested, see [watch-list](#watch-list) |
+
+**⚠️ A and B are one stack, not two.** `unity mcp` is an MCP front-end over the same
+`com.unity.pipeline` local HTTP API (`:7800`) that `unity list` and `unity command` use —
+confirmed from the CLI's own help text. Treating them as independent arms overstates
+redundancy: **if Pipeline breaks, A and B fail together.** Rows below justified as
+"structural" on the assumption they are separate need re-auditing.
+
+**⚠️ B2 exists and is a landmine on Unity 6.5.** `com.unity.ai.assistant` ships a relay MCP
+(named pipes) distinct from Pipeline, and Unity documents a Claude Code config for it. On 6.5
+it livelocks the AssetDatabase so the Editor never loads and *every* bridge appears broken —
+see [UNITY-TOOLING-NOTES.md](../UNITY-TOOLING-NOTES.md#log) and
+[CoplayDev#1219](https://github.com/CoplayDev/unity-mcp/issues/1219).
+
+**Arm C's governance has changed twice.** `justinpbarnett/unity-mcp` → transferred to
+`CoplayDev` (2025-08) → **Ramen acquired Coplay (2026-03, GDC)**, the deal explicitly
+including this repo; it is now marketed alongside Aura. Licence has been MIT throughout (the
+`LICENSE` file has exactly two commits in its history) and no fork ever diverged meaningfully
+— 1,392 forks enumerated, 374 of the 428 pushed within three months are pure upstream syncs,
+and the whole network's star maximum is 17. So arm C is simply arm C; the note here is that
+its steward now sells a competing product, which is a tracking concern, not a code one.
+
+**Naming trap:** the `unity-editor-mcp` registration is arm B (Unity's CLI-hosted server). It
+is unrelated to the dead GitHub repo `akiojin/unity-editor-mcp`.
 
 The tool prefix is derived from **the client's own config key**, so C's
 namespace differs per client and neither spelling is canonical: Codex's
@@ -69,6 +99,56 @@ Short version, with the detail living elsewhere — this file is for verdicts,
   `127.0.0.1:8080`; Unity's Pipeline listens on `0.0.0.0:7800` while reporting
   its own URL as `127.0.0.1`. On this one dimension C is the better-behaved
   server. [Detail](unity-mcp.md#security-notes).
+
+### Anti-capabilities
+
+Things an arm **cannot** do. As load-bearing for selection as what it can, and easier to
+forget because nothing errors — you just find out mid-task.
+
+| Arm | Cannot |
+|---|---|
+| **B** | `get_scene_hierarchy` has no depth/limit/pagination — 290,642 chars on one real scene, over the client token limit. `find_gameobjects` likewise. |
+| **B** | `get_component_properties` returns `<unsupported:Quaternion>` (rotation) and `<unsupported:LayerMask>`. |
+| **B** | No terrain introspection — `TerrainData` size/bounds have no read-only route, pushing a read-only question toward `eval`. |
+| **C** | `set_property` echoes no state, so a write can vanish silently. |
+| **C** | Setup cannot be fully scripted (GUI-gated). Note: `ClientConfigurationService.ConfigureAllDetectedClients()` *is* a public method already called non-interactively, so the capability exists — what is missing is a shipped headless entrypoint. "Impossible" overstates it. |
+| **A/B** | Nothing scene-level without a running Editor — and they share one failure domain. |
+
+### Watch-list
+
+Credible, untested. Listed so the option set is honest rather than tidy; a row here is a
+complete answer until someone runs a trial. **Unity 6.5 support is unproven for every arm we
+use** — only `isuzu-shiranui` cites the 6.5 `EntityId` migration explicitly.
+
+| Project | ★ | Licence | Why it earns a row |
+|---|---|---|---|
+| [isuzu-shiranui/UnityMCP](https://github.com/isuzu-shiranui/UnityMCP) | 141 | MIT | Only project citing verified Unity **6.5** support incl. the `EntityId` migration |
+| [CoderGamester/mcp-unity](https://github.com/CoderGamester/mcp-unity) | 1855 | MIT | Largest independent Unity MCP; 16 months continuous; names Claude Code and Codex |
+| [hatayama/unity-cli-loop](https://github.com/hatayama/unity-cli-loop) | 491 | MIT | Most actively developed; CLI-first and deprecating its own MCP; OpenUPM + npm |
+| [r1n7aro/Locus](https://github.com/r1n7aro/Locus) | 696 | **GPL-3.0** | Only serious non-MCP, non-CLI architecture — fails independently of everything else |
+| [liyingsong99/AIBridge](https://github.com/liyingsong99/AIBridge) | 199 | MIT | Broadest declared range (`2019.4 ~ 6000.x`); adds Player-process debugging |
+| [FunplayAI/funplay-unity-mcp](https://github.com/FunplayAI/funplay-unity-mcp) | 209 | MIT | Cheapest standup — `openupm add`, one-click Codex/Claude config |
+| [youngwoocho02/unity-cli](https://github.com/youngwoocho02/unity-cli) | 310 | MIT | Single Go binary, no Python/MCP — **but releases stopped 2026-06-11** |
+| [cziberpv/unity-bridge](https://github.com/cziberpv/unity-bridge) | 74 | MIT | JSON-file protocol — works for any agent that can write files, no MCP needed |
+
+**Rejected, with reasons** (so this is not re-derived):
+
+- **Asset Store listings generally** — installs are UI-only through Package Manager → My
+  Assets; no CLI, REST, or webhook, and `PackageManager.Client` covers only the UPM registry.
+  Any Asset-Store-distributed arm structurally fails the headless-setup axis. The one good
+  listing (realvirtual MCP Server) is free on GitHub anyway.
+- **Aura, Bezi, Ludus AI, Unity Muse** — no headless surface, an MCP *client* rather than a
+  server, Unreal-only, and deprecated, respectively.
+- **`nuskey8/UnityAgentClient`** (273★) — Agent Client Protocol, inverts control direction.
+  Dormant since 2025-11. The *protocol shape* is worth knowing; the repo is not.
+- **`AnkleBreaker-Studio/unity-mcp-server`** (362★) — active and broad, but **`NOASSERTION`
+  licence** on both repos. Resolve before touching.
+- **High-star corpses:** `jackwrichards/UnityMCP` (521★, untouched since 2025-03, no licence),
+  `notargs/UnityNaturalMCP` and `nurture-tech/unity-mcp-server` (both **archived**),
+  `akiojin/unity-mcp-server` (README opens `[DEPRECATED]`).
+- **Roll-your-own** — `-executeMethod` harnesses are superseded by `unity run --command`;
+  Roslyn REPLs are redundant since `unity eval` already is one;
+  `Unity-Technologies/com.unity.rpc` abandoned 2021.
 
 ---
 

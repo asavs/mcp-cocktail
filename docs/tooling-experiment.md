@@ -186,3 +186,67 @@ but told you exactly what went wrong is the better tool.
 
 Stamp every entry with the versions you ran against. These tools are moving
 fast; an unversioned result rots into a lie.
+
+## Evidence tiers
+
+A blind three-arm trial is the strongest evidence and the most expensive. It is no longer
+the only admissible kind, for a structural reason: **the arm count grew past three**
+(see the [scorecard](tooling-scorecard.md)), and an N-arm blind trial is a cost nobody
+will pay N times. Holding out for it leaves the matrix empty, which is not neutral —
+an empty row silently reads as "no difference."
+
+Cite the tier alongside the evidence. A lower tier is never a reason to omit a finding;
+it is a reason to label it.
+
+| Tier | What it is | Use for |
+|---|---|---|
+| **T1 — trial** | Blind, multi-arm, acceptance criteria written first | Verdicts; matrix rows at High confidence |
+| **T2 — head-to-head** | Two arms, same task, not blind | Matrix rows at Medium |
+| **T3 — incidental** | One arm used in earnest on real work, outcome recorded | Matrix rows at Low; anti-capabilities; "what works" |
+| **T4 — inspection** | Read from tool schemas, source, or docs without running | Watch-list entries; never a verdict |
+
+**T3 is the tier that was missing, and most real evidence is T3.** Ordinary work
+establishes constantly that an arm handled something cleanly or could not do it at all.
+Recording that is the difference between a matrix that fills and one that does not.
+
+**Record successes, not only defects.** Selection needs to know what works as much as what
+breaks, and a defect-skewed record systematically understates every arm.
+
+## Is the option set still complete?
+
+Every section above assumes the arms are given. That assumption has failed once already:
+the option set was believed to be three and is at least twelve. A matrix with perfect data
+about three arms is still wrong if there are twelve, and **nothing in this protocol would
+have surfaced the difference.**
+
+No registry has adequate coverage — the official MCP registry misses the four largest Unity
+servers; a GitHub topic Atom feed for this does not exist; PulseMCP has the best data
+(221 Unity servers) but is now API-key gated. **Build the probe rather than subscribing.**
+
+Run this periodically — quarterly is enough — and record what was rejected as well as added:
+
+```bash
+# 1. GitHub, star-gated. The gate IS the mechanism:
+#    stars>=0 -> 663 repos | >=50 -> 24 | >=100 -> 15
+#    At >=50 this is hand-reviewable and moves by roughly one a month.
+gh api "search/repositories?q=unity+mcp+in:name,description+stars:>=50&sort=updated&per_page=50"
+gh api "search/repositories?q=unity+ai+agent+in:name,description+stars:>=50&sort=updated"
+
+# 2. OpenUPM manifest tree — diff against last run.
+gh api "repos/openupm/openupm/git/trees/master?recursive=1" \
+  --jq '.tree[]|select(.path|startswith("data/packages/"))|.path'
+
+# 3. First-party drift (npm-style, no auth).
+curl -s https://packages.unity.com/com.unity.pipeline     | jq '."dist-tags"'
+curl -s https://packages.unity.com/com.unity.ai.assistant | jq '."dist-tags"'
+```
+
+This catches entrants whether or not the author registered anywhere — which is precisely how
+arm D was missed.
+
+**Track governance, not just code.** Ownership, licence and maintainer changes decide whether
+an arm is safe to depend on. Arm C changed hands twice in 19 months without the record
+noticing. Resolve `NOASSERTION` licences before adopting anything.
+
+**Log rejections and why.** A sweep that records only what it added gets re-run from scratch
+every time.

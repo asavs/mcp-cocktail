@@ -520,6 +520,104 @@ See issue #1 for the full write-up. Key findings:
 
 Newest first.
 
+### 2026-08-05 — a fourth confident-wrong-answer, a startup-snapshot pattern, and a version audit
+
+Versions at time of writing: CLI `1.0.0-beta.3`, Editor `6000.5.5f1`, Pipeline
+`0.4.0-exp.1`, CoplayDev `v10.0.0` installed (`v10.1.2` current).
+
+**Version currency.** CLI and `com.unity.pipeline` are both **exactly current** —
+`latest-beta.json` pins the same CLI build and the registry's `dist-tags.latest` is
+`0.4.0-exp.1`; stable `latest.json` still 404s. So CLI and Pipeline findings in this file are
+live, not stale. **`com.coplaydev.unity-mcp` is three releases behind** (v10.0.2, v10.1.0,
+v10.1.2) — re-confirm any arm-C finding against v10.1.2 before relying on it. Editor
+`6000.5.7f1` exists; anything blamed on the Editor is unverified against current.
+
+**`[feedback]` `unity pipeline list` reports `isRunning: true` for a project with no Editor.**
+Observed with zero `Unity.exe` processes, nothing listening on 7800-7810, and no
+`Library/EditorInstance.json`:
+```json
+"projectName": "…-gabe", "isRunning": true, "hasPipelinePackage": true,
+"pipelineServer": { "isReachable": false, "apiUrl": null }
+```
+Only `isReachable`/`apiUrl` are honest. `unity editors running --json` — same CLI, same cwd,
+same session — correctly returned `{"count": 0}`. There is no stale lock file to explain it.
+This is the **fourth** instance of the confident-wrong-answer pattern (with `editors running`,
+path-less `unity open`, and `pipeline list`'s invented cwd row). Cross-check liveness against
+process command lines and port bindings.
+
+**Pattern: reads-once-at-startup.** Three instances now recorded in this file, so stating the
+general rule: **changing ambient state around a running process does nothing — restart it.**
+1. `uv` must be on the Editor's PATH *at launch*; Refresh never recovers.
+2. MCP tool lists fix at client start; a client started before the server sees no tools.
+3. **New:** the Editor snapshots its cloud access token at startup. `unity auth login` while
+   the Editor is running leaves it signed out indefinitely —
+   `[Licensing::Module] Error: Access token is unavailable; failed to update`. After a restart
+   with the CLI already authenticated: `Successfully updated the access token`. The symptom is
+   a signed-out `Project Settings > Services`, which reads as *"I need Unity Hub"* — it does
+   not. Verified with Hub.exe absent from the machine. Order is `unity auth login` **then**
+   launch the Editor.
+
+**`[feedback]` The CLI keeps no record of the commands you run.**
+`%APPDATA%\UnityHub\logs\cli-log.json` had 1,420 entries in one day and zero record of any
+invoked command — only internal modules (`CliLicensingSdkAdapter`, `CloudConfig`,
+`IdentityProvider`). For a tool whose documented failure mode is returning confident wrong
+answers, there is no audit trail of what was asked. Note the tension: beta.3 *"expanded the
+opt-in usage analytics to record which commands run"* — command names go to analytics
+(opt-in, default off) but not to the local log.
+
+**Undocumented CLI surface worth knowing.**
+- `unity status` — one line giving port, state, project, version and PID for every connected
+  Editor. Strictly better than `unity editors running` for liveness.
+- `unity cloud org list` / `unity cloud project list` exist; `unity cloud --help` prints no
+  `Commands:` section, same trap as `editors`.
+- **`[feedback]`** `unity cloud project list --cloud-org <id>` returns
+  `Fetched 0 of 0 projects before failure at offset 0: Request failed with status code 403`
+  for a `project guest` role. Guests cannot enumerate an org's projects; the message should
+  say so. As written it reads as a missing invitation.
+- `unity bug --help` does **not** hang, and states it reports *"directly to the Unity bug
+  reporter"* — i.e. Unity's private QA intake, defaulting to the signed-in account's email.
+  No report ID is offered anywhere in its interface.
+
+**`[feedback]` Pipeline `get_scene_hierarchy` has no depth, limit, or pagination.**
+Its only parameter is `path`. On a real scene it returned **290,642 characters / 7,883 lines**
+and exceeded the client's token limit outright. `find_gameobjects` likewise has no
+limit/offset. Unity has already solved this class for captures in 0.4.0-exp.1 (path-only
+returns *"so agent tool results stay small"*).
+
+**`[feedback]` Pipeline `get_component_properties` cannot read common value types.**
+Returns the literal strings `"<unsupported:Quaternion>"` for `m_LocalRotation` and
+`"<unsupported:LayerMask>"` for layer masks. Rotation is not an exotic field. Related: there
+is no terrain introspection at all — reading `TerrainData` bounds has no read-only route,
+which pushes a read-only question toward `eval`.
+
+**⚠️ Do not install `com.unity.ai.assistant` on Unity 6.5.** It ships its own relay MCP
+(named pipes) distinct from Pipeline, but on 6.5 it livelocks the AssetDatabase at startup —
+main thread at 100% in `AssetDatabase::InitialRefresh` → `GuidDB::ValidateChangedGUIDs`, from
+a circular dependency between `com.unity.ai.inference` and `com.unity.asset-manager-for-unity`.
+The Editor never finishes loading, so *every* MCP bridge fails and gets blamed. Recovery:
+remove it from `manifest.json`, **delete `packages-lock.json`**, clear `Library/`. Disabling
+is insufficient — it re-adds itself.
+[CoplayDev#1219](https://github.com/CoplayDev/unity-mcp/issues/1219). `[unverified]` locally —
+deliberately not reproduced.
+
+**Corrections to earlier entries.**
+- The scorecard's `mcp-for-unity-server 3.4.5` is **FastMCP's version, not CoplayDev's**.
+  `Server/src/main.py` constructs `FastMCP(name="mcp-for-unity-server", …)` with no `version=`
+  argument, so the handshake falls back to FastMCP's own; `pyproject.toml` pins
+  `fastmcp>=3.0.2,<4`. The server version tracks the package version — v10.0.0 → server
+  10.0.0. There is no `mcp-for-unity-server` package on PyPI; the real one is
+  `mcpforunityserver`.
+- **`[not reproduced on CLI 1.0.0-beta.3]`** `unity editors running --json` exited **0** with
+  correct output. The unreliable-exit-code note names `--help` and `editors info`
+  specifically; this subcommand behaves.
+- **`[not reproduced on Pipeline 0.4.0-exp.1]`** the duplicate-`instanceId` finding in
+  `docs/tooling-scorecard.md`. Four distinct GameObjects returned four distinct ids. Three
+  *components on one GameObject* did share an id while their `globalId`s differed, which is a
+  different and plausibly correct behaviour.
+
+**Naming trap.** The `unity-editor-mcp` MCP registration is **Unity's official CLI-hosted
+server** (arm B). It is unrelated to the dead 10★ GitHub repo `akiojin/unity-editor-mcp`.
+
 ### 2026-08-04 — CoplayDev particle preview can persist prefab material changes
 
 - Unity Editor `6000.5.5f1`, `com.coplaydev.unity-mcp` `v10.0.0`: while a
