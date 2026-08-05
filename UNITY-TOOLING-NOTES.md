@@ -520,6 +520,22 @@ See issue #1 for the full write-up. Key findings:
 
 Newest first.
 
+### 2026-08-04 — CoplayDev particle preview can persist prefab material changes
+
+- Unity Editor `6000.5.5f1`, `com.coplaydev.unity-mcp` `v10.0.0`: while a
+  third-party particle prefab was open in Prefab Mode, `manage_vfx` with
+  `action="particle_play"` reported `materialReplaced: true` and
+  `replacementReason: "missing_material"`. The source prefab YAML changed on
+  disk even though no explicit save action was requested. A SHA-256 comparison
+  against the untouched source copy caught the mutation, and restoring the
+  prefab plus `.meta` returned both hashes to the originals. Preview disposable
+  copies or verify source hashes when inspecting third-party VFX this way.
+- The same setup's `validate_script` reported a duplicate zero-parameter
+  `ResolveSelectedSpell` signature even though the source contained one method,
+  Unity completed its domain reload, and the Console showed zero compiler
+  errors. Treat this validator diagnostic as advisory and verify against the
+  source plus actual Unity compilation.
+
 ### 2026-08-04 — CoplayDev structured script edits can drop signature indentation
 
 - Unity Editor `6000.5.5f1`, `com.coplaydev.unity-mcp` `v10.0.0`: observed
@@ -587,3 +603,15 @@ after, on this branch, in `86d8a71`; see `docs/unity-mcp.md`.)
   -Wait -WindowStyle Hidden` kept the shell attached. Verify the actual process,
   log completion marker, and filesystem effects rather than trusting the first
   shell return.
+
+### 2026-08-04 — URP particle upgrader needs blend-mode finalization
+
+- Unity Editor `6000.5.5f1`, URP `17.5.0`: calling
+  `UnityEditor.Rendering.Universal.ParticleUpgrader.Upgrade` directly changed
+  legacy `Particles/Standard Surface` and `Particles/Standard Unlit` materials
+  to their URP particle shaders and copied their textures/colors, but the
+  resulting transparent materials initially retained opaque blend state
+  (`_DstBlend=0`, `_ZWrite=1`) despite `_Surface=1`. Calling
+  `UnityEditor.BaseShaderGUI.SetupMaterialBlendMode` afterward produced the
+  expected transparent queue and blend/Z-write state. The `BaseShaderGUI` type
+  is in the `UnityEditor` namespace in this package version.
