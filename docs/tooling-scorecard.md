@@ -67,7 +67,7 @@ the picture, and cite the trial.
 | Invoking Editor menu items | **B** | — | Medium | T-000; `menu` executed and listed all 873 items |
 | Editor lifecycle (quit, play mode) | **B** | — | Low | T-000; `File/Exit` worked but errored on response as the server died |
 | Scripted / repeatable setup | **A** | — | Medium | T-000; every CLI step was reproducible, GUI steps were not |
-| GameObject authoring | **B** | — | Medium | T-004: B finished in 11 calls with zero errors; A finished in 23 with two **silent** no-ops and one 400. A is fine *with* a verify-every-write discipline — it authors as well as it inspects (T-003). **C unverified since T-001** at `v10.0.0`; it has now failed to run in four consecutive attempts |
+| GameObject authoring | **C**, then **B** | — | Medium-High | T-005, the first run with all three arms actually executing: **failed calls C 0, B 1, A 3**. C accepts the public `size`; A and B require the serialized `m_Size`. C echoes state on 2 of 4 mutating calls, B 1 of 5, A 0 of 6. Prefer **B** where tools must be allowlisted read-only (44/140 vs 9/47) or where loud, specific errors matter more than call count. A authors correctly *with* a verify-every-write discipline (T-003) |
 | Prefab authoring | ? | — | None | **Untested** |
 | Script creation + attach + recompile | ? | — | None | **Untested** |
 | Builds and test runs | ? | — | None | **Untested** — A and B both offer it |
@@ -115,6 +115,14 @@ Python server self-reports `10.0.0` and `Packages/manifest.json` pins `#v10.0.0`
 package's own update check records `10.1.2` as current. **Anything in this file attributed to
 arm C describes v10.0.0 behaviour observed on 2026-07-28 and has not been re-measured since.**
 
+**`[T-005, 2026-08-06: one of the four is now refreshed; three are not.]`** Arm C executed for
+the first time in five attempts and *GameObject authoring* now rests on measured `10.0.0`
+behaviour rather than T-001's. **Physics/geometry queries, carrying on when the other MCP is
+down, and multi-client environments are still unrefreshed** — nothing in T-005 exercised them.
+The installed package is still `10.0.0`. Note also that **no live arm-C call reports a package
+or server version**: three resources were checked and the number had to be read from the
+project lockfile. Any future staleness audit of arm C has to go outside the arm to do it.
+
 The earlier observation that "no filled row cites evidence newer than the installed versions"
 is tautological — evidence is produced by running what is installed — and must not be read as
 reassurance about the remaining rows.
@@ -150,6 +158,14 @@ Short version, with the detail living elsewhere — this file is for verdicts,
   time: 0 of 8 mutating calls echo state.** `create_gameobject`, `set_transform`,
   `add_component` and `set_serialized_field` all return the same identity block. So B beats A
   here by exactly one tool, the same margin by which it beats C.
+  **`[corrected by T-005 — the "B beats C" half is wrong]`** All three arms were finally
+  measured in one run, and the ranking is **C 2 of 4, B 1 of 5, A 0 of 6**. C's
+  `manage_gameobject create` returns the object's full serialized state (transform, tag, layer,
+  `componentNames`, `parentInstanceID`) on both create calls; B has exactly one echoing mutator
+  and A has none. **C is the best arm on this axis, not the worst.** What remains true of C is
+  the narrower original claim: `manage_components set_property` echoes only `{"instanceID": …}`,
+  so a property write specifically still vanishes without a read-back. Read state back on all
+  three arms regardless — no arm echoes on every mutator.
 - **`[feedback]` The `instanceId` collision is an engine-level `EntityId` issue, not a
   Pipeline one — and the field is misnamed.** Source-confirmed in
   `com.unity.pipeline@f49636739437`: on Editor 6000.4+ `PipelineUtils.GetObjectId` returns
@@ -182,6 +198,20 @@ Short version, with the detail living elsewhere — this file is for verdicts,
   value exceeds 2^53**, so any client round-tripping it through a double corrupts it — the
   differing trailing digits across arms (`…729300` / `…729200`) are rounding artifacts, not
   data.
+  **`[T-005 identifies the mechanism — the collision *is* the rounding, not a defect beneath
+  it]`** T-004 spotted that the trailing digits are artifacts but still read the collision
+  itself as engine-level. Arm C ran for the first time and settles it. C serialises the same
+  `EntityId` values as **quoted strings** and they come back distinct: `"568105589213729364"`
+  (a GameObject) and `"568105589213729346"` (its material) — **18 apart**. That magnitude sits
+  in `[2^58, 2^59)`, where IEEE-754 double spacing is 2⁶ = **64**, so two ids 18 apart *cannot*
+  round-trip through a double as distinct values. A and B emit the field as a **bare unquoted
+  JSON number** and duly return one value (`…729400`, `…729500`) for objects the engine
+  distinguishes. C's own small session-local `instanceID`s (`-28066`, `-28076`, `-28090`,
+  `-28094`) were likewise all distinct. **The engine is not colliding; Pipeline's serializer is
+  destroying the distinction**, and quoting the value would fix it. The operational rule is
+  unchanged — use `globalId` or `hierarchyPath`, never `instanceId` — but "nondeterministic"
+  was the wrong word: the loss is deterministic in the value's magnitude, which is why it
+  looked intermittent whenever two ids happened to straddle a 64-boundary.
 - **B has the better safety model** (`confirm=true`, `dry_run`, path
   confinement) — and ships `eval`/`eval_file`, which bypass all of it.
   [Detail](unity-mcp.md#security-notes).
@@ -245,8 +275,10 @@ forget because nothing errors — you just find out mid-task.
 | **B** | `get_scene_hierarchy` has no depth/limit/pagination — 290,642 chars on one real scene, over the client token limit. `find_gameobjects` likewise. |
 | **B** | `get_component_properties` returns `<unsupported:Quaternion>` (rotation) and `<unsupported:LayerMask>`. |
 | **B** | No terrain introspection — `TerrainData` size/bounds have no read-only route, pushing a read-only question toward `eval`. |
-| **C** | `set_property` echoes no state, so a write can vanish silently. |
-| **C** | Setup cannot be fully scripted (GUI-gated). Note: `ClientConfigurationService.ConfigureAllDetectedClients()` *is* a public method already called non-interactively, so the capability exists — what is missing is a shipped headless entrypoint. "Impossible" overstates it. |
+| **C** | `set_property` echoes no state, so a write can vanish silently. `[reconfirmed T-005 — `manage_components set_property` returns a bare `{"instanceID": …}`. Note this is now C's *only* non-echoing class: `manage_gameobject create` echoes the full object.]` |
+| **C** | Cannot report its own version. No tool or resource among 47/18 carries a package or server version — `custom-tools`, `ListMcpResourcesTool` and `telemetry_status` were all checked. The only route is reading `packages-lock.json` from outside the arm. `[T-005]` |
+| **A/B** | Cannot return a usable object handle. `instanceId` is a 59-bit `EntityId` emitted as a bare JSON number, so distinct objects less than 64 apart collapse onto one value in transit. C quotes the same field and it stays distinct. `[T-005]` |
+| ~~**C**~~ | ~~Setup cannot be fully scripted (GUI-gated).~~ **Struck 2026-08-06.** `three-way-setup.sh` registers the Editor with arm C's server unattended and T-005 then ran the arm end-to-end, so this is not an anti-capability. The residual truth is narrower and belongs to the standing observations: recovering a plugin that has *dropped* its attachment is Editor-side. |
 | **C** | `manage_scene` cannot **discard** an unsaved scene — its actions are `save` / `load` / `create` / `get_*`. `load` refuses over unsaved changes (correct), so a dirty scratch scene blocks all navigation and the only way through is `execute_code`, i.e. the always-ask tier, for what should be routine. `[feedback]` `[T3]` |
 | **B** | Nothing outside the Editor can restart Pipeline once its editor assembly has dropped out — its menu items go with it, so `execute_menu_item` has nothing to call. Recovery is an Editor restart, by hand. [Detail](../UNITY-TOOLING-NOTES.md#pipeline-can-drop-out-of-a-live-editor-session). |
 | **B/C** | Neither exposes any **physics or geometry query** — no raycast, no collider bounds, no mesh extents. Introspection reads serialized fields, which cannot answer what a cast returns. Pushes a read-only question into `eval` / `execute_code`. |
@@ -356,6 +388,151 @@ authoring trial is for.
 ## Trials
 
 Newest first. Template at the bottom.
+
+### T-005 — the same authoring task, and the first one that was actually three-way
+
+**Date** 2026-08-06 · **Category** authoring · **Mutating** yes ·
+**Versions** CLI `1.0.0-beta.3` (`unity --version`), Editor `6000.5.5f1`, Pipeline
+`0.4.0-exp.1`, MCP for Unity package `10.0.0`
+
+Fourth run of the T-001 task — root empty, child empty at local `(1, 2, 3)`, `BoxCollider`
+with size `(2, 2, 2)` — named `T005-Root-<arm>` / `T005-Child-<arm>`. Blind and serial, one
+subagent per arm, each writing its own account before any comparison:
+[arm-a.md](trials/T-005/arm-a.md) · [arm-b.md](trials/T-005/arm-b.md) ·
+[arm-c.md](trials/T-005/arm-c.md). Objects deleted afterwards and confirmed gone by read-back
+on all six names; scene never saved.
+
+| Arm | Outcome | Steps | Friction | Verifiable? |
+|---|---|---|---|---|
+| A CLI | completed | 18 invocations (14 against the Editor, of which 3 were failed mutations) | 2 rejected encodings for `m_Size`, 1 silent no-op on `--position 1,2,3`, 1 mangled multi-flag | Only by separate read — **0 of 6** successful mutating calls echoed state |
+| B MCP official | completed | 11 Editor calls (1 failed) | one loud 400 on `size` | Mostly by separate read — **1 of 5** mutating calls echoed state |
+| C MCP CoplayDev | completed | 14 Editor calls, of which **7 were the task** and 7 were spent hunting version numbers | **none — every call succeeded first try** | **2 of 4** mutating calls echoed state |
+
+**Arm C executed.** Four consecutive prior attempts did not, so every arm-C claim in this file
+had been carrying `v10.0.0` evidence from 2026-07-28 with no re-measurement. The three open
+questions T-004 could not ask are answered below, and two of them contradict the record.
+
+**The gate held only because it was tested twice.** `three-way-setup.sh` now registers arm C
+and asserts `instance_count=1`, and it reported all five lines green. That is the check T-004's
+follow-up asked for, and it is necessary but **not sufficient** — it proves a plugin registered
+with the server, not that a message survives the round trip. A single real `read_console` call
+was made before any arm was spawned and returned live Editor console text. **Run the message,
+not the status field.** Every wrong diagnosis in this trial series has come from trusting a
+signal instead of a payload.
+
+**C accepts the public API name `size`. A and B require the serialized `m_Size`.** This is the
+headline, and it reverses three trials' worth of "`m_Size` over `size` reconfirmed."
+
+- **C**: `manage_components action=set_property property="size" value=[2,2,2]` succeeded on the
+  first attempt, read-back confirming `size: {x:2.0, y:2.0, z:2.0}`. `m_Size` was never needed.
+- **B**: `set_component_properties {"size":[2,2,2]}` → 400,
+  `Component 'BoxCollider' has no serialized property 'size'.` `m_Size` worked immediately after.
+- **A**: `set_serialized_field --field size` → exit 6,
+  `Field 'size' was not found on 'BoxCollider'. Use a SerializedProperty path (e.g. 'speed', 'settings.speed', 'items.Array.data[0]').`
+
+A and B fail identically because they are one stack. C almost certainly translates the public
+property name to the serialized one before reaching Unity's `SerializedProperty` API, where
+Pipeline passes it through raw. **This is a real ergonomic difference, not noise:** it is the
+difference between the name in every Unity doc page working and costing a round trip.
+
+**C also wants fewer encodings.** A needed three shapes to get a `Vector3` in — `[1,2,3]` for
+`set_transform --position`, `{"x":2,"y":2,"z":2}` for `set_serialized_field --value` (the array
+form is rejected: `Expected a JSON object with named components (e.g. { "x": 0 }) but received
+a 'Array'`), and a bare comma string silently accepted as a no-op. C took `[1,2,3]` for both
+`position` and `size` with no discrimination between them.
+
+**State echo, all three arms measured in one run: C 2 of 4, B 1 of 5, A 0 of 6.** C's two
+`manage_gameobject create` calls returned the full serialized object — transform, tag, layer,
+`componentNames`, `parentInstanceID`. Its two `manage_components` calls (`add`, `set_property`)
+returned identity only. B's split is exactly as T-003 and T-004 recorded: `set_component_properties`
+alone echoes, the other three do not. **C is now the best arm on this axis and A is still the
+worst**, which inverts the T-001-era claim that confirmation was free on B and absent on C.
+The practical rule is unchanged for every arm: read the state back. C's `set_property` in
+particular still returns a bare `{"instanceID": -28076}` with no value in it.
+
+**The `instanceId` collision is a transport artifact, and C's data proves it.** This supersedes
+the standing entry, which treats the collision as an engine-level defect that "reproduces at
+both GameObject and component granularity."
+
+- **A** returned `568105589213729500` for *both* `T005-Root-A` and `T005-Child-A`, and
+  `568105589213729400` for the child's `BoxCollider`.
+- **B** returned `568105589213729400` for all five objects it touched — two GameObjects and a
+  component — emitted as a **bare unquoted JSON number**.
+- **C** returned small session-local `instanceID`s that were all distinct — root `-28066`,
+  child `-28076`, BoxCollider `-28090`, its material `-28094` — *and*, separately, the large
+  `EntityId` values as **quoted strings**: gameObject `"568105589213729364"`, material
+  `"568105589213729346"`.
+
+Those two C values are **18 apart**. At magnitude ~5.68 × 10¹⁷ the value sits in `[2^58, 2^59)`,
+where the IEEE-754 double spacing is 2⁶ = **64**. Two distinct `EntityId`s 18 apart therefore
+*cannot* survive a round trip through a double — they collapse onto one. That is precisely what
+A and B emit: values rounded to a multiple of the ULP (`…729400`, `…729500`), identical across
+objects that the engine distinguishes. **The engine's ids are distinct; Pipeline's JSON destroys
+the distinction by serializing a 59-bit integer as a number instead of a string.** C avoids it
+by quoting. The operational advice is unchanged — never key on `instanceId` from A or B — but
+the diagnosis moves from "nondeterministic engine bug" to "deterministic precision loss in
+Pipeline's serializer," which is a fixable defect with a known owner.
+
+**Arm C reports three different version numbers, and none of the live tools carry the one that
+matters.** Recorded separately rather than reconciled:
+
+| Number | What it actually is | Where it comes from |
+|---|---|---|
+| `10.0.0` | the installed Unity package | `Packages/manifest.json` pins `#v10.0.0`; `Packages/packages-lock.json` agrees; `Library/PackageCache/com.coplaydev.unity-mcp@7b7db7b31f4e/package.json` says `"version": "10.0.0"` |
+| `10.1.0` | the Python server `uvx` resolved | recorded by T-001's correction note; **not re-observed in this run** |
+| `mcp-for-unity-server 3.4.6` | `serverInfo.version` in the MCP `initialize` response | client-side handshake only; **not re-observed in this run**, and not reachable from inside an arm |
+| `unity-mcp/editor_state@2` | a response-schema version for one resource | `mcpforunity://editor/state`, `schema_version` field |
+
+The package and the Python server version-stamp independently because the package pulls the
+server via `uvx`, so `10.0.0` and `10.1.0` are not in conflict — they describe different
+artifacts. `3.4.6` is a third artifact again, and the earlier `3.4.5` in T-001 was FastMCP's
+version, not the server's. **Separately: not one of arm C's 47 tools or 18 resources reports a
+package or server version.** Three were checked (`mcpforunity://custom-tools`,
+`ListMcpResourcesTool`, `manage_editor telemetry_status`) and none carry one; the only route to
+`10.0.0` was reading the project's own lockfile from outside the arm. An arm that cannot tell
+you which version of itself you are talking to is why four rows in this file went stale unnoticed.
+
+**Step counts do not separate these arms, and should not be read as if they do.** C's task path
+was 7 calls, B's 11, A's 14 against the Editor — but C's 7 buys less verification than B's 11,
+because C's two read-backs were resource reads that returned everything at once while B spent
+separate calls per property. The honest separator is **failed calls: A 3, B 1, C 0.**
+
+**Arm A's silent argument-drop reproduced, plus a new variant.** `--position 1,2,3` returned
+exit 0 and `"success": true` and changed nothing, as T-004 found. New this run:
+`--position 1 2 3` does not merely lose the value, it **mis-binds the trailing tokens to other
+parameters**, producing `Could not resolve 'target': No loaded object with instanceId 2.` — an
+error that names a parameter the caller never set. `unity command <tool> --help` was probed
+directly and confirmed to print generic usage only.
+
+**Verdict** — **C for this task**, on friction, and for the first time on something other than
+step count. C is the only arm in four runs of this task to complete it with **zero failed
+calls**, the only one that accepts the property name Unity's own documentation gives, and the
+only one whose object handles survive its own JSON. B remains the better-instrumented arm
+(loud, specific errors; 44 of 140 tools allowlistable read-only against C's 9 of 47) and is the
+right default for unattended work where a permission rule has to be written. A completes the
+task but pays for it, and two of its five failures announced nothing.
+
+This is a friction verdict, not a capability verdict — all three arms produced identical correct
+scenes, as they have every time.
+
+**Matrix changes** — *GameObject authoring* re-rated to **C, then B**, confidence raised to
+Medium-High (first run with all three arms actually executing). Standing observations updated on
+the `instanceId` collision (mechanism corrected to serializer precision loss) and on state echo
+(C now measured best, not worst). Arm-C staleness cleared for this row only.
+
+**Follow-ups**
+- **Three rows still rest on unrefreshed `v10.0.0` arm-C evidence**: physics/geometry queries,
+  carrying on when the other MCP is down, and multi-client environments. T-005 refreshed
+  GameObject authoring and nothing else.
+- **File the `instanceId` serialization defect against Pipeline**, with the 64-ULP arithmetic
+  above. It is a one-character fix (quote the value) and it currently makes every object handle
+  A and B return non-discriminating.
+- Does C's public-name translation extend beyond `BoxCollider.size` — does it accept `center`,
+  `isTrigger`, or arbitrary public properties on other component types? Cheap to test and it
+  decides whether the ergonomic win generalises or is one lucky alias.
+- Arm C still cannot report its own version from any live call. Check whether a newer package
+  exposes one before trusting any future staleness audit.
+- Prefab authoring and script-create-attach-recompile, still untested after five trials.
 
 ### T-004 — the same authoring task, first attempt at a genuine three-way
 
