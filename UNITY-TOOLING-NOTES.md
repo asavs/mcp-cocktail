@@ -173,6 +173,7 @@ port that should be bound, the XML that should exist.
 | 3 | CoplayDev's green client row proves only **configured**. Separately: listening, and loaded by the client | [unity-mcp.md](docs/unity-mcp.md#verify-and-recover) |
 | 4 | `isRunning: true` with `isReachable: false` and no Editor at all — see P2/4 | [Log 2026-08-05](#2026-08-05--a-fourth-confident-wrong-answer-a-startup-snapshot-pattern-and-a-version-audit) |
 | 5 | A **bound** `0.0.0.0:7800` owned by the live Editor, refusing every connection — a stale listener from a dead Pipeline instance, while the live server had moved to 7801. `401` proves a server; *bound* proves only a socket | [Pipeline can drop out](#pipeline-can-drop-out-of-a-live-editor-session) |
+| 6 | **A check written to catch this pattern committed it.** `three-way-setup.sh --check` reported all three arms up on the strength of CoplayDev's `/mcp` answering HTTP 406 and `claude mcp list` saying Connected. Both were true; the Editor had never registered with that server, so every tool call died at the transport. `IsLocalHttpServerReachable()` is a bare `TcpClient` probe (`ServerManagementService.cs:480-501`) and proves the socket, not the session. The states here are **server running → Editor registered**, and only the second is the one you want | [Log 2026-08-06](#2026-08-06-last--bridgestartasync-from-eval-deadlocks-the-editor-permanently) |
 
 Every intermediate broken state in this stack reports success *somewhere*. That is what
 makes an out-of-order setup look like a broken install.
@@ -926,6 +927,52 @@ See issue #1 for the full write-up. Key findings:
 ## Log
 
 Newest first.
+
+### 2026-08-06 (last) — `Bridge.StartAsync()` from `eval` deadlocks the Editor permanently
+
+**`[feedback]` `[reproduced on v10.0.0]` Calling CoplayDev's
+`MCPServiceLocator.Bridge.StartAsync()` synchronously from `eval` freezes the Unity Editor
+with no recovery short of killing the process.** Observed: `Responding=False`, ~370s CPU
+burned, the project's own Pipeline server flipping `isReachable` true → false, and CoplayDev
+tool calls changing their error from `no_unity_session` to `Unity session not ready (ping not
+answered)` — the main thread could no longer service its own ping.
+
+The cause is ordinary and worth knowing in general. `BridgeControlService.StartAsync()`
+(`BridgeControlService.cs:80-115`) and `TransportManager.StartAsync()`
+(`TransportManager.cs:45-66`) `await` without `ConfigureAwait(false)`, so their continuations
+are posted back to the captured synchronization context. **`eval` runs on the Editor's main
+thread**, so blocking on the returned task with `.GetAwaiter().GetResult()` needs the very
+thread the continuation is queued on. Classic sync-over-async deadlock. Wrapping the call in
+`Task.Run(...)` and blocking on *that* deadlocks identically — the inner continuation still
+wants the main thread.
+
+**The general rule, which is bigger than this package:** `eval` and `eval_file` execute on the
+Editor's main thread. **Never block on a `Task` inside them.** Any Unity or package API that
+returns a `Task` and was written for a GUI callback may capture the main-thread context, and
+blocking on it wedges the Editor beyond recovery. Fire-and-forget it, poll an observable side
+effect, or drive it from the code path its author intended. A hang here is not "slow" — the
+process never comes back.
+
+This also earns `eval` its `ask`-tier placement more convincingly than the "arbitrary C#"
+argument does. Arbitrary C# that throws is recoverable; arbitrary C# that deadlocks the main
+thread is not.
+
+**Registration is the thing that was actually missing**, and no automated path sets it. Two
+EditorPrefs-gated auto-connect routes exist and both were dark:
+`HttpAutoStartHandler` (`HttpAutoStartHandler.cs:36-37,49-50`) needs
+`MCPForUnity.AutoStartOnLoad`, read live as `False`; `HttpBridgeReloadHandler`
+(`HttpBridgeReloadHandler.cs:33-107`) needs `MCPForUnity.ResumeHttpAfterReload`, which is only
+set when the bridge was *already* running before a domain reload — chicken-and-egg. The
+fixture that starts the server (`EditorPrefs` flag plus `StartLocalHttpServer`) launches the
+external Python process and **never touches `Bridge`/`TransportManager`
+(`ServerManagementService.cs:239-381`)**. The only path that calls `Bridge.StartAsync()` is the
+**Connect button in the MCP window** — which is what produced the last successful
+`Plugin registered:` line, dated 2026-07-29.
+
+So the corrected position on arm C, third revision in one day: it is not GUI-gated for
+*starting the server*, which scripts fine; it **is** GUI-gated for *registering the Editor*,
+unless `AutoStartOnLoad` is set ahead of time. Setting that pref before the Editor loads is
+the scriptable route and has not been tested.
 
 ### 2026-08-06 (last) — "GUI-gated" was wrong, and the real gate is the client
 

@@ -85,6 +85,36 @@ coplay_up() {
   curl -s -o /dev/null -w '%{http_code}' --max-time 4 "$COPLAY_URL/mcp" 2>/dev/null
 }
 
+# Does any Editor actually have a session with that server?
+#
+# This is the check T-004 needed and did not have. The first version of this script called
+# all three arms up because /mcp answered and `claude mcp list` said Connected. Both were
+# true and both were irrelevant: the Editor starts C's server and does not dial into it, so
+# every Editor-bound call blocked 20s and returned no_unity_session. A server answering
+# proves a server. The states are *server running* -> *Editor registered*, and only the
+# second one is the one you want. Do not collapse them again.
+#
+# Asks the server rather than the Editor, deliberately: the Editor can be internally wedged
+# while still reporting a stale cached "connected".
+coplay_registered() {
+  local hdr sid body
+  hdr="$(mktemp)"
+  curl -s -D "$hdr" -o /dev/null --max-time 8 -X POST "$COPLAY_URL/mcp" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"three-way-setup","version":"1"}}}' \
+    >/dev/null 2>&1
+  sid="$(grep -i '^mcp-session-id:' "$hdr" 2>/dev/null | tr -d '\r' | sed 's/^[^:]*: *//')"
+  rm -f "$hdr"
+  [ -z "$sid" ] && { echo ""; return 1; }
+  body="$(curl -s --max-time 8 -X POST "$COPLAY_URL/mcp" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -H "Mcp-Session-Id: $sid" \
+    -d '{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"mcpforunity://instances"}}' 2>/dev/null)"
+  grep -oE '"instance_count"[^0-9]*[0-9]+' <<<"$body" | grep -oE '[0-9]+$' | head -1
+}
+
 # A bound port is necessary but not sufficient — check the JSON-RPC endpoint answers.
 code="$(coplay_up)"
 if [ "$code" != "000" ] && [ -n "$code" ]; then
@@ -115,6 +145,28 @@ else
   fi
 fi
 
+if [ "$MODE" != "stop" ]; then
+  inst="$(coplay_registered)"
+  if [ -n "$inst" ] && [ "$inst" -gt 0 ] 2>/dev/null; then
+    ok "an Editor is registered with arm C's server (instance_count=$inst)"
+  else
+    bad "arm C's server is up, but NO Editor is registered with it (instance_count=${inst:-unknown})"
+    echo "        Every Editor-bound arm-C call will block ~20s and return no_unity_session."
+    echo "        This is silent by default: DebugLogs is 0."
+    echo
+    echo "        Registration is performed by the Connect button in"
+    echo "        Window/MCP for Unity, or automatically when MCPForUnity.AutoStartOnLoad"
+    echo "        is set BEFORE the Editor loads. Nothing else sets it — starting the"
+    echo "        server does not, because that path never touches Bridge/TransportManager."
+    echo
+    echo "        Do NOT call MCPServiceLocator.Bridge.StartAsync() from eval to force it."
+    echo "        eval runs on the Editor's main thread and that call awaits without"
+    echo "        ConfigureAwait(false); blocking on it deadlocks the Editor with no"
+    echo "        recovery short of killing the process. Task.Run does not help."
+    fail=1
+  fi
+fi
+
 if [ "$MODE" = "stop" ]; then
   info "stopping server and resetting the EditorPrefs flag"
   unity command eval --code 'MCPForUnity.Editor.Services.MCPServiceLocator.Server.StopLocalHttpServer(); UnityEditor.EditorPrefs.SetBool("MCPForUnity.UseHttpTransport", false); return "stopped";' --json >/dev/null 2>&1
@@ -136,7 +188,10 @@ reg="$(claude mcp list 2>&1)"
 if grep -qi "^$MCP_NAME:" <<<"$reg"; then
   line="$(grep -i "^$MCP_NAME:" <<<"$reg")"
   if grep -qi "Connected" <<<"$line"; then
-    ok "$MCP_NAME registered and connected"
+    # "Connected" here proves the client reached the server's socket. It does not prove the
+    # server can reach an Editor, and it stays green when it cannot -- see the registration
+    # check above, which is the one that matters.
+    ok "$MCP_NAME reachable from this client (proves the socket, not the Editor session)"
   else
     bad "$MCP_NAME registered but not connected:"
     printf '        %s\n' "$line"
