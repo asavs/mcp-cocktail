@@ -641,7 +641,9 @@ See issue #1 for the full write-up. Key findings:
   <id>` and won't merge. Test against a real scene copied from the project.
 
 - **`[feedback]` UnityYAMLMerge blocks on a GUI in two different ways, and
-  both hang git.** Pass `-h --fallback none` for any non-interactive use.
+  both hang git.** Use `tools/git/unityyamlmerge` for any non-interactive use.
+  It passes `-h --fallback none` — but **do not copy those flags bare**; the
+  second one destroys your side of a real conflict. See the warning below.
   1. Given a file it can't parse it raises a **modal error dialog** ("File is
      not a valid text serialized YAML file") and waits. Observed as a live
      `UnityYAMLMerge.exe` sitting on `MainWindowTitle: UnityYAMLMerge Error`
@@ -655,8 +657,35 @@ See issue #1 for the full write-up. Key findings:
      disables it.
 
   Neither flag is on by default and neither appears in Unity's merge-driver
-  documentation. Confirmed that both flags together still merge a real scene
-  correctly — two independent edits, both preserved, object count unchanged.
+  documentation. Both flags together merge a real scene correctly — two
+  independent edits, both preserved, object count unchanged.
+
+  **⚠️ `--fallback none` destroys your side of a genuine conflict. Do not pass
+  it bare.** `[reproduced]` The test above cannot detect this, because
+  *independent* edits are precisely the case that merges cleanly. On an
+  **unresolvable same-field conflict**, UnityYAMLMerge writes **their** content
+  into `dest` and exits 2 — and in driver mode `dest` **is `%A`, your own file**:
+
+  ```
+  A: base THEIRS OURS dest   -> exit=2  OURS=0  THEIRS=1
+  B: base OURS THEIRS dest   -> exit=2  OURS=1  THEIRS=0   (argument order only
+                                                            decides who wins)
+  C: without --fallback none -> exit=1  OURS=1  THEIRS=0
+  ```
+
+  Isolated with `dest` kept separate from `ours`: `ours.unity` untouched
+  (`OURS=1 THEIRS=0`) while `dest` held `OURS=0 THEIRS=1`. Git then marks the
+  path conflicted holding **only their version**, so resolving by accepting the
+  file silently loses local work, with nothing anywhere recording that it
+  happened. Non-conflicting merges are unaffected (`exit=0`, both edits kept),
+  which is why every earlier test passed.
+
+  **`tools/git/unityyamlmerge` already handles this** — it snapshots our side
+  before invoking, and on failure restores it and runs `git merge-file` so the
+  conflict arrives as ordinary markers with both versions
+  (`OURS=1 THEIRS=1 markers=2`). Clean merges still exit 0. **The danger is in
+  copying the flag out of this file into a hand-rolled driver.** Use the
+  wrapper, or reproduce its recovery path.
 
   **`-h` does not cover argument errors, and nothing does.** It is an option
   *of the `merge` subcommand*, so anything failing before that parses still
