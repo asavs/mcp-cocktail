@@ -43,8 +43,12 @@ in [docs/unity-cli.md](docs/unity-cli.md) and
 - If a later version fixes something, don't delete the entry — mark it
   `[fixed in X]`. The history is the point.
 - Anything worth sending upstream, tag `[feedback]` so it's easy to collect.
-  (Historically only 16 of 52 findings ever carried this tag, so **do not use it as a
-  selector** when collecting for upstream — read the sections.)
+  **Do not use it as a selector** when collecting for upstream — read the sections.
+  `[recounted 2026-08-06]` This line used to say "only 16 of 52 findings ever carried this
+  tag". The tag is on **23**. The denominator has no canonical list behind it: nothing
+  enumerates the 52, and a bullet-level count of this file alone runs to roughly 99. Both
+  numbers were stale prose about the record's own shape — the class of claim nothing
+  re-checks, because it is not about Unity. The advice was right for the wrong reason.
 
 **One finding, one home.** The same trap is currently written out in full in two or three
 files, and the copies drift: three of them were corrected in one place and left wrong in
@@ -150,6 +154,7 @@ human table, which has several boolean-looking columns a loose grep will match w
 | 4 | A direct `Unity.exe` batch invocation **returns control** while the Editor keeps importing a fresh `Library` | [Log 2026-08-03](#2026-08-03--direct-unity-batch-mode-testing-on-windows) |
 | 5 | `-quit` together with `-runTests` **exits 0** having compiled, run no tests, and written no results XML | [Log 2026-08-03](#2026-08-03--direct-unity-batch-mode-testing-on-windows) |
 | 6 | `unity --help` and `unity editors info` return **255** while printing correct output | [Reliability](#reliability--ergonomics) |
+| 7 | `unity open <project>` still blocks at 3 minutes after the Editor has reached `state: ready` (~60s). Killing it leaves the Editor running. Poll `unity status --json` instead | [Log 2026-08-06](#2026-08-06--the-cli-reads-the-scene-graph-and-a-version-stamp-that-is-two-numbers) |
 
 **What to do instead.** Never gate on exit status. Give every invocation a generous timeout
 (60s+ is normal; `tools/git/unityyamlmerge` bounds its call at 300s and reports a killed
@@ -184,7 +189,7 @@ for arm C.
 
 | # | Instance | Where |
 |---|---|---|
-| 1 | CoplayDev `manage_gameobject action=create` accepts `component_properties`, returns `"success": true`, adds the component, and leaves the property at its default. Source-confirmed: the create path never reads it | [scorecard T-001](docs/tooling-scorecard.md#t-001--build-the-same-gameobject-hierarchy-through-each-arm) |
+| 1 | **`[fixed in v10.1.2]`** CoplayDev `manage_gameobject action=create` accepts `component_properties`, returns `"success": true`, adds the component, and leaves the property at its default. Source-confirmed: the create path never reads it. Fixed upstream by [PR #1298](https://github.com/CoplayDev/unity-mcp/pull/1298), merged 2026-08-02, shipped in `v10.1.2` — kept as written because the installed package is still `v10.0.0` | [scorecard T-001](docs/tooling-scorecard.md#t-001--build-the-same-gameobject-hierarchy-through-each-arm) |
 | 2 | CoplayDev `set_property` returns only `{"instanceID": ...}` — no value — so a failed write is indistinguishable from a successful one | [scorecard](docs/tooling-scorecard.md#standing-observations) |
 | 3 | A `[merge "unityyamlmerge"]` section with **any** key but no `.driver` kills every Unity-asset merge; with *no* keys git silently falls back to a text merge. Neither state is announced | [Git / UnityYAMLMerge](#git--unityyamlmerge) |
 | 4 | Bare double quotes in a git config value are **stripped** on write — `git config --get` and the file on disk disagree, and the file is the one that lies | [Git / UnityYAMLMerge](#git--unityyamlmerge) |
@@ -720,6 +725,9 @@ recorded as *"`create` silently drops the property"* on black-box evidence; the 
 shape that the Python layer's schema rejects before it reaches Unity — a different bug, in a
 different layer, with a different fix. See
 [scorecard T-001](docs/tooling-scorecard.md#t-001--build-the-same-gameobject-hierarchy-through-each-arm).
+**`[fixed in v10.1.2]`** — and the fix landed in exactly the layer the source read predicted,
+which is the strongest available evidence that reading installed source beats black-box
+inference. Kept here as method, not as an open defect.
 
 Two cautions. `Library/` is gitignored, so a path into it is not a citation anyone else can
 follow — quote the file, line and version. And it is *installed* source, so it goes stale
@@ -917,6 +925,55 @@ See issue #1 for the full write-up. Key findings:
 ## Log
 
 Newest first.
+
+### 2026-08-06 — the CLI reads the scene graph, and a version stamp that is two numbers
+
+Versions: CLI `1.0.0-beta.3`, Editor `6000.5.5f1`, Pipeline `0.4.0-exp.1`, CoplayDev package
+`v10.0.0` with Python server `10.1.0`.
+
+**`[feedback]` The `unity` CLI can inspect and mutate a live scene, contradicting the
+scorecard's highest-confidence row.** With an Editor open, `unity list` enumerates **141**
+Pipeline tools — the same catalogue the official MCP exposes, including `get_scene_hierarchy`,
+`create_gameobjects`, `delete_gameobject` and `eval` — and `unity command get_scene_hierarchy
+--json` returns the live hierarchy with exit 0. The matrix carried "live scene-graph
+inspection: A impossible, CLI has no scene access" at High confidence, labelled structural.
+It was never true. The information needed to refute it was already in the same file, in the
+note stating that `unity command` uses the same `com.unity.pipeline` HTTP API; no one ran the
+command.
+
+**Arm A is two mechanisms under one letter, and that is what let the error survive.**
+`unity build` / `unity test` / `unity install` spawn a fresh batch-mode Editor or talk to the
+Hub, and touch no Pipeline — so "headless / CI, no Editor running" is genuinely structural.
+`unity list` / `unity command` are a front-end over the same Pipeline server the official MCP
+uses, so they share its failure domain and its capabilities. A claim proved against one face
+transfers to the other only by accident.
+
+**`[feedback]` `unity open <project>` does not return when the Editor is ready.** The Editor
+came up and reached `state: ready` in roughly 60 seconds; the command was still blocking at
+three minutes and had to be killed. The Editor survived the kill. Poll `unity status --json`
+for readiness rather than waiting on the open command to exit — it reports port, project,
+version, PID and state, and it is the reliable signal. A seventh instance of
+[P3](#p3--termination-is-not-completion-and-completion-is-not-termination), on the
+completion-without-termination side.
+
+**The exit code is destroyed by the tool most likely to be used to read it.** `unity list`
+with no Editor running returns exit **6** and names all three prerequisites — an honest
+failure, and evidence that "A fails quietly" is narrower than the blanket phrasing suggests.
+But `unity list 2>&1 | head -30; echo $?` reports **0**, because `$?` holds `head`'s status,
+not `unity`'s. In a record whose central CLI warning is *verify effects, not exit codes*, the
+pipeline used to inspect an exit code can silently fabricate a success. Capture first
+(`out=$(cmd 2>&1); code=$?`), filter after.
+
+**A CoplayDev install has two version numbers that drift apart.** The Unity package is pinned
+in `packages-lock.json` (`v10.0.0` here), but the Python server is not vendored — it is
+resolved by `uvx` from PyPI at run time, and resolved to `mcp-for-unity-server 10.1.0` against
+that `v10.0.0` package. Stamping "CoplayDev v10.0.0" therefore under-specifies what actually
+ran. Record both. A separate consequence: `fastmcp 3.4.5` is the dependency's version and has
+never been the server's — an earlier stamp reading "server 3.4.5" has been corrected.
+
+**Re-verified against `v10.1.2` and still current:** the client-configurator count is 22, with
+no Grok configurator, unchanged from `v10.0.0` — so the multi-client verdict survives, though
+its justification is a version fact rather than the structural claim it was labelled.
 
 ### 2026-08-05 (evening) — six findings mined from an 8-hour session, and an instruments section
 
