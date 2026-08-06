@@ -193,6 +193,7 @@ for arm C.
 | 2 | CoplayDev `set_property` returns only `{"instanceID": ...}` — no value — so a failed write is indistinguishable from a successful one | [scorecard](docs/tooling-scorecard.md#standing-observations) |
 | 3 | A `[merge "unityyamlmerge"]` section with **any** key but no `.driver` kills every Unity-asset merge; with *no* keys git silently falls back to a text merge. Neither state is announced | [Git / UnityYAMLMerge](#git--unityyamlmerge) |
 | 4 | Bare double quotes in a git config value are **stripped** on write — `git config --get` and the file on disk disagree, and the file is the one that lies | [Git / UnityYAMLMerge](#git--unityyamlmerge) |
+| 5 | `unity command <tool>` accepts `name=X` and JSON-blob arguments, ignores them, and returns `"success": true`. Only `--name X` binds. A dropped filter returns the whole scene; on a mutating tool it executes with defaults and writes | [Log 2026-08-06 (later)](#2026-08-06-later--t-003-and-four-cli-traps-found-by-running-it) |
 
 **What to do instead.** Prefer the arm whose mutating calls echo state (arm B does; arm C
 does not). Where you cannot, make the read-back a step of the operation rather than an
@@ -925,6 +926,48 @@ See issue #1 for the full write-up. Key findings:
 ## Log
 
 Newest first.
+
+### 2026-08-06 (later) — T-003, and four CLI traps found by running it
+
+Versions: CLI `1.0.0-beta.3`, Editor `6000.5.5f1`, Pipeline `0.4.0-exp.1`. Trial writeups in
+[docs/trials/T-003/](docs/trials/T-003/); verdicts in
+[the scorecard](docs/tooling-scorecard.md#t-003--t-001-re-run-this-time-including-arm-a).
+
+**`[feedback]` The CLI silently ignores two of the three plausible argument syntaxes, and
+returns success.** Only `--name X` works. Both `name=X` and a JSON blob `'{"name":"X"}'` are
+accepted, ignored, and reported as `"success": true`. On `find_gameobjects --name T003-Root-A`
+the result is `count: 1`; with `name=T003-Root-A` it is `count: 662`, the entire scene, with no
+warning that a filter was dropped. On a **mutating** tool the same behaviour executes with
+defaults — probing `create_gameobject` with a mis-syntaxed argument creates a stray
+`New Game Object` in the live scene rather than erroring. An unknown parameter name should be
+an error, and on a mutating call it should be an error before anything is written. Added as a
+P5 instance.
+
+**`[feedback]` `unity command <tool> --help` never gives per-tool help.** It prints the generic
+`command` subcommand usage no matter which tool is named, so the obvious route to a tool's
+parameters is a dead end that looks like it worked. The real schema — names, types, required,
+defaults — is only in the `parameters` array of `unity list --json`. Combined with the finding
+above, the discoverable path and the safe path are different paths.
+
+**`[feedback]` On Windows, Git Bash rewrites Unity hierarchy paths before the CLI sees them.**
+Every Unity hierarchy path starts with `/`, and MSYS2 path conversion turns `/T003-Root-A` into
+`C:/Program Files/Git/T003-Root-A`. The failure is loud and the message names the mangled path,
+which is good error design, but the cause is invisible unless you know MSYS does this. Set
+`MSYS_NO_PATHCONV=1`, or use PowerShell. This affects every path-valued argument, not just
+`delete_gameobject`.
+
+**`get_scene_hierarchy` has no filter, depth or pagination parameter, which makes it unusable
+through an MCP client on a real scene.** On this project it returned 291k characters / 7,905
+lines and exceeded the tool-result limit; `find_gameobjects` with a filter had to be
+substituted for every check. The same call through the CLI is fine — a shell can filter the
+payload before any of it reaches a context window. **Same stack, same tool, different failure
+mode depending on the delivery channel**, and the first demonstrated case where the choice
+between A and B matters despite their being one stack.
+
+**Serial, not parallel, and that is a property of the subject.** One Editor serves every arm,
+so two arms run concurrently are two agents mutating one scene rather than two trials. Any
+future multi-arm trial has to be serialised, and this bounds how much a trial can be
+parallelised no matter how many agents are available.
 
 ### 2026-08-06 — the CLI reads the scene graph, and a version stamp that is two numbers
 

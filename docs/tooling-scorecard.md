@@ -67,7 +67,7 @@ the picture, and cite the trial.
 | Invoking Editor menu items | **B** | — | Medium | T-000; `menu` executed and listed all 873 items |
 | Editor lifecycle (quit, play mode) | **B** | — | Low | T-000; `File/Exit` worked but errored on response as the server died |
 | Scripted / repeatable setup | **A** | — | Medium | T-000; every CLI step was reproducible, GUI steps were not |
-| GameObject authoring | **B** or **C** | — | Medium | T-001; both correct, no winner — see the failure modes |
+| GameObject authoring | **A**, **B** or **C** | — | Medium | T-003 added A, which authors as well as it inspects; T-001 covered B and C. No winner on step count across all three |
 | Prefab authoring | ? | — | None | **Untested** |
 | Script creation + attach + recompile | ? | — | None | **Untested** |
 | Builds and test runs | ? | — | None | **Untested** — A and B both offer it |
@@ -124,9 +124,20 @@ Short version, with the detail living elsewhere — this file is for verdicts,
   count them as Editors. The failure mode is real but narrower than "A fails quietly"
   suggests; treat it as a hazard to check for, not a property to assume.
   [Detail](unity-cli.md#scripting-the-cli).
-- **B's mutating calls echo the resulting state; C's don't.** Confirmation is
-  free on B and a deliberate extra read on C, whose `set_property` returns only
-  an instance id. Read state back on C. T-001.
+- **`[corrected by T-003]` B's mutating calls mostly echo *identity*, not state.**
+  The earlier form of this said B echoes the resulting state and C does not, so confirmation
+  was free on B. T-003 measured it directly and it is not so: `create_gameobject`,
+  `set_transform` and `add_component` return `globalId` / `hierarchyPath` / `instanceId` only
+  — `set_transform`'s response contains no `position` field at all. `set_component_properties`
+  is the one exception and does echo the resulting property map. So read state back on **both**
+  arms; B is better than C here by one tool, not by policy.
+- **`[reproduced on Pipeline 0.4.0-exp.1, contradicting the earlier re-test]`** T-003 saw B
+  echo the **same `instanceId` for two distinct GameObjects** and for a Transform component,
+  while `globalId` and `hierarchyPath` stayed correct and distinct throughout. The standing
+  entry below records a re-test that returned four distinct ids and marked this
+  `[not reproduced]`. Both observations are now in the record; the conditions that separate
+  them are not known. `hierarchyPath` remains the handle that is unambiguous by construction —
+  which is the actionable part either way.
 - **`[not reproduced on Pipeline 0.4.0-exp.1]`** T-001 recorded that B repeats one
   `instanceId` across distinct objects. A re-test returned four distinct ids for four
   distinct GameObjects. Three *components on one GameObject* did share an id while their
@@ -279,6 +290,45 @@ authoring trial is for.
 ## Trials
 
 Newest first. Template at the bottom.
+
+### T-003 — T-001 re-run, this time including arm A
+
+**Date** 2026-08-06 · **Category** authoring · **Mutating** yes ·
+**Versions** CLI `1.0.0-beta.3`, Editor `6000.5.5f1`, Pipeline `0.4.0-exp.1`
+
+Same task as T-001 — root empty, child empty at local `(1, 2, 3)`, `BoxCollider` with `size`
+`(2, 2, 2)` — run because T-001 excluded arm A on the premise that the CLI has no scene
+access, which is false. Blind and **serial**, one subagent per arm, each writing its own
+account before any comparison: [arm-a.md](trials/T-003/arm-a.md) · [arm-b.md](trials/T-003/arm-b.md).
+
+Serial rather than parallel because one Editor serves both arms. Concurrent runs would have
+been two agents mutating one scene, which is not two trials.
+
+**Arm C did not run.** Its package is installed but nothing was listening on `127.0.0.1:8080`,
+and starting it is GUI-gated. `[still current on v10.0.0]` for the standing claim that C is the
+most expensive arm to stand up — it is the only arm that cannot be brought up from a shell.
+
+**Both arms completed the task and verified it by read-back.** A took 10 core steps, B took 10
+excluding hygiene checks. There is no meaningful step-count winner, which is also what T-001
+found between B and C.
+
+**Arm A authors, not just inspects.** T-001's exclusion was wrong in both directions: the CLI
+creates GameObjects, reparents, sets local transforms, adds components and sets serialized
+properties, all verified by independent read-back.
+
+**The first demonstrated A-vs-B difference, and it is not in the tools.** Both arms call the
+same Pipeline tool for scene inspection. Through B, `get_scene_hierarchy` on this scene
+returned 291k characters / 7,905 lines and **exceeded the tool-result limit** — it has no
+filter, depth or pagination parameter, so on any real scene it is unusable and you must
+substitute `find_gameobjects`. Through A the identical call is fine, because the payload lands
+in a shell that can filter it before any of it reaches a context window. **Same stack, same
+tool, different failure mode by delivery channel.** For inspection of large scenes, prefer A.
+
+**Both arms failed identically on `size` vs `m_Size`** — `set_component_properties` and its CLI
+equivalent both require Unity's serialized field name, not the public C# API name in the
+Scripting Reference. One failed call plus a discovery round-trip, on both arms. This is the
+first *empirical* confirmation of the A=B correction: one stack, one bug, surfacing the same
+way through both front-ends.
 
 ### T-001 — build the same GameObject hierarchy through each arm
 
