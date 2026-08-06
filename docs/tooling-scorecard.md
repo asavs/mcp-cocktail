@@ -160,9 +160,24 @@ Short version, with the detail living elsewhere — this file is for verdicts,
   [Detail](unity-mcp.md#security-notes).
 - **B's errors are unusually good** — `unity list` names all three
   prerequisites when the Pipeline isn't reachable. Use it as the benchmark.
-- **C is GUI-gated** — setup can't be fully scripted, making it the most
-  expensive arm to stand up on a fresh machine.
-  [Detail](unity-mcp.md#coplaydev-mcp-for-unity).
+- **`[not reproduced on v10.0.0 — this claim is wrong]` C is not GUI-gated.** The entry used to
+  say setup could not be fully scripted, making C the most expensive arm to stand up. Source
+  and a live test say otherwise. Unity-side, C is an HTTP *client*; the listener on
+  `127.0.0.1:8080` is a separate `python.exe` spawned via `uvx`. Starting it needs one
+  EditorPrefs flag and one public call, both reachable through `eval`:
+  `EditorPrefs.SetBool("MCPForUnity.UseHttpTransport", true)` then
+  `MCPForUnity.Editor.Services.MCPServiceLocator.Server.StartLocalHttpServer(true)`. The `true`
+  is `quiet`, which **deliberately skips the only confirmation dialog in the path**
+  (`ServerManagementService.cs:299-312`) — the same flag the auto-start path uses internally.
+  Setting `AutoStartOnLoad` plus `UseHttpTransport` starts it on every Editor load with no
+  interaction at all (`HttpAutoStartHandler.cs:18-107`). Verified by a bound port owned by a
+  `python.exe` distinct from the Editor, then stopped and the pref reset.
+- **The real gate on C is the client, not the arm** — and it is
+  [P1, reads-once-at-startup](../UNITY-TOOLING-NOTES.md#p1--reads-once-at-startup). An MCP
+  server must be registered before a Claude Code session starts, so C cannot be added to a
+  session already running, however cheaply its server starts. This is why C has never appeared
+  in a trial run from an existing session, and it is scriptable — register, then start a fresh
+  session — rather than needing a human.
 - **B can be allowlisted read-only, C mostly can't** — 44 of 140 vs 9 of 47,
   because a permission rule can only be as precise as the tool it names.
   [Detail](#tool-surfaces-at-a-glance).
@@ -315,9 +330,15 @@ account before any comparison: [arm-a.md](trials/T-003/arm-a.md) · [arm-b.md](t
 Serial rather than parallel because one Editor serves both arms. Concurrent runs would have
 been two agents mutating one scene, which is not two trials.
 
-**Arm C did not run.** Its package is installed but nothing was listening on `127.0.0.1:8080`,
-and starting it is GUI-gated. `[still current on v10.0.0]` for the standing claim that C is the
-most expensive arm to stand up — it is the only arm that cannot be brought up from a shell.
+**Arm C did not run**, but `[corrected the same day]` **not for the reason first recorded.**
+This entry originally said C was unavailable because starting it is GUI-gated, and marked the
+"most expensive arm to stand up" claim `[still current]` on the strength of nothing listening
+on `127.0.0.1:8080`. That was absence-of-evidence, concluded without reading source that was
+sitting in `PackageCache`. The server **starts headlessly** — see the standing observation
+below. The real obstacle is different and is a property of the *client*, not the arm: an MCP
+server must be registered before a Claude Code session starts, so C cannot be added to a
+session already in progress. A three-way trial needs a **fresh session with C registered**,
+which is scriptable, rather than a human at the Editor, which is not.
 
 **Both arms completed the task and verified it by read-back.** A took 10 core steps, B took 10
 excluding hygiene checks. There is no meaningful step-count winner, which is also what T-001

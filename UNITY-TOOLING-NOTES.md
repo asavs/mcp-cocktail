@@ -927,6 +927,46 @@ See issue #1 for the full write-up. Key findings:
 
 Newest first.
 
+### 2026-08-06 (last) — "GUI-gated" was wrong, and the real gate is the client
+
+**`[not reproduced on v10.0.0]` CoplayDev's server starts headlessly.** The record carried "C
+is GUI-gated — setup can't be fully scripted, making it the most expensive arm to stand up."
+Source says otherwise. Unity-side, C is an HTTP *client*; the thing that listens on
+`127.0.0.1:8080` is a separate `python.exe` spawned via `uvx`
+(`ServerCommandBuilder.cs:59-61`). Two steps start it, both public and both reachable through
+`eval`:
+
+```csharp
+UnityEditor.EditorPrefs.SetBool("MCPForUnity.UseHttpTransport", true);
+MCPForUnity.Editor.Services.MCPServiceLocator.Server.StartLocalHttpServer(true);
+```
+
+The `true` is `quiet`, and it **deliberately skips the only confirmation dialog in the path**
+(`ServerManagementService.cs:299-312`) — the same flag the package's own auto-start uses.
+Setting `AutoStartOnLoad` alongside `UseHttpTransport` starts the server on every Editor load
+with no interaction whatsoever (`HttpAutoStartHandler.cs:18-107`). Confirmed by effect: a
+listener appeared on `127.0.0.1:8080` owned by a `python.exe` distinct from the Editor process,
+and the package's own `IsLocalHttpServerReachable()` returned true. Stopped and the pref reset
+afterwards.
+
+**The real obstacle is a property of the client and is already a named pattern.** An MCP server
+must be registered before a Claude Code session starts, so C cannot be added to a session
+already in progress no matter how cheaply its server starts. That is
+[P1, reads-once-at-startup](#p1--reads-once-at-startup) — the same mechanism that makes hooks
+require a new session. It explains why C has never appeared in a trial launched from a running
+session, and it is **scriptable** (register, then start a fresh session) rather than requiring
+a human.
+
+**How the wrong claim survived, which is the part worth keeping.** It was re-verified *the same
+day* and marked `[still current]` on the evidence that nothing was listening on `8080`. That is
+absence-of-evidence: the port is empty whether the arm is ungatable or merely not started, and
+the two were never distinguished. The source that settles it was in `Library/PackageCache` the
+whole time and cost one grep. This is the third claim in one pass — with the scene-graph row
+and the `instanceId` dismissal — where a comfortable reading survived because nobody spent two
+minutes on the cheap check, and the only one of the three that was re-verified *and still got
+the wrong answer*. **Re-verifying a claim by reproducing the symptom is not the same as
+checking the claim.**
+
 ### 2026-08-06 (last) — editing a file through the shell erases it from Claude Code's history
 
 Claude Code keeps per-file version snapshots under `~/.claude/file-history/<session-uuid>/`,
