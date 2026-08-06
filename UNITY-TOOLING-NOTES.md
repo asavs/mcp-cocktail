@@ -27,6 +27,7 @@ in [docs/unity-cli.md](docs/unity-cli.md) and
   - [Sequencing gotcha](#sequencing-gotcha-cost-us-two-restarts) — install → Editor restart → import → tools appear
   - [CoplayDev MCP for Unity](#coplaydev-mcp-for-unity-comcoplaydevunity-mcp) — uv/PATH, stale README, client list
   - [Running both servers at once](#running-both-servers-at-once)
+- [Authoring, assets and animation](#authoring-assets-and-animation) — humanoid import, edit-mode sampling, asset integrity
 - [Git / UnityYAMLMerge](#git--unityyamlmerge) — driver placeholders, partial-config fatal
 - [Log](#log) — dated session entries, newest first
 
@@ -528,6 +529,68 @@ grep for `true` matches the wrong one and reports ready when nothing is. Use
 `pipelineServer.isReachable` from `--json`.
 
 ---
+
+## Authoring, assets and animation
+
+Everything above this point is about **standing the tooling up** — a phase each machine passes
+through once. This section is about using it, which is where long sessions actually spend their
+time, and it started empty. That gap was measured, not guessed: a 19-hour authoring session
+consulted this file zero times and paid full price for thirteen traps, because none of them were
+in it. Add what you hit here.
+
+### Humanoid import: scale the root, never `globalScale`
+
+**`[reproduced]` A small `ModelImporter.globalScale` builds an Avatar that passes every static
+check and collapses in play mode.** Importing a 14.6 m model down to 2.6 m via
+`useFileScale = false` + `globalScale = 0.0018` produced an Avatar reporting `isValid = True`,
+`isHuman = True`, 53 bones mapped, and correct bind-pose bone positions in the editor — then
+collapsed the whole skeleton to a point the instant the Animator evaluated.
+
+Nothing flags it: not the editor, not the console, not the import log. **The tell is
+`Animator.humanScale`** — it read `0.011` against the shipped player's `1.010`, with hips→head at
+`0.008` vs `0.643`.
+
+**Do instead:** import with `useFileScale = true` and resize via the **root transform's
+`localScale`** on the prefab. Match the scale to **hips height (leg length)**, not total height —
+stride length in retargeted locomotion clips follows leg length, so matching hips avoids foot
+sliding. The reference in this project is `Armature.fbx`: hips at `y = 0.981`, `humanScale 1.010`.
+
+### Verify humanoid poses in play mode, never edit mode
+
+**`[reproduced]`** `AnimationMode.SampleAnimationClip` and `AnimationClip.SampleAnimation` both
+produce **garbage poses** for these humanoid clips in the editor. A pose sampled in edit mode is
+not evidence of anything, and chasing the difference is chasing a bug that does not exist. Enter
+play mode to check retargeting.
+
+This is a specific case of a general shape: the check that is cheap to run is not always the check
+that is true. See [P4 — the green light that proves only its own layer](#patterns).
+
+### Non-networked characters must declare the locomotion animation events
+
+**`[reproduced]`** The shared locomotion clips fire animation events — `OnFootstepWalk`,
+`OnFootstepRun`, `OnLand`, `TurnInPlaceStart`, `TurnInPlaceEnd` — which `CoreAnimator` normally
+receives. `CoreAnimator` is a `NetworkAnimator` and requires a `NetworkObject`, so a **non-networked
+NPC cannot use it**. Any character that is not the full `CorePlayer` must declare those five methods
+itself, with signatures matching `CoreAnimator`'s, or Unity logs an error on every footstep.
+
+### Telling a gutted asset from an unsmudged LFS pointer
+
+Binary assets under `Assets/` are LFS-tracked, so a file that is *smaller than expected* has two
+completely different causes and two different fixes. Check the byte size before diagnosing:
+
+| Size | Cause | Fix |
+|---|---|---|
+| ~130 bytes | Unsmudged **LFS pointer** — content never fetched | `git lfs pull` |
+| a few KB | Content **locally destroyed** while tracked | `git checkout -- <path>` |
+| full size | Neither | Look elsewhere |
+
+Observed on `Assets/Game/Worlds/OldForest/Data/OldForest_Terrain_Optimized.asset`: 27,603,308 bytes
+intact, once seen at 8,720 bytes with the heightmap, splatmaps, detail and tree data all gone, while
+`HEAD` still held the full asset. The symptom was a flat, collisionless, untextured terrain with
+spawn points apparently floating — which reads as upstream damage and is not.
+
+**Back up the damaged copy and surface it before restoring.** A wiped asset may be someone's
+in-progress re-optimisation rather than corruption.
 
 ## Git / UnityYAMLMerge
 
