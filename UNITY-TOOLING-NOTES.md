@@ -975,6 +975,41 @@ never been the server's — an earlier stamp reading "server 3.4.5" has been cor
 no Grok configurator, unchanged from `v10.0.0` — so the multi-client verdict survives, though
 its justification is a version fact rather than the structural claim it was labelled.
 
+**Phase 3's measurement — and why the specified metric had to be changed.** INVALIDATE was to
+measure "the proportion of claims whose newest supporting evidence predates the currently
+installed version." That number cannot be computed and would not help if it could. There is no
+canonical list of claims to divide by, and measured against *installed* it is tautological —
+evidence is produced by running what is installed, so nothing predates it. Measured against
+*available*, over the matrix, which is enumerable and checkable:
+
+| | |
+|---|---|
+| Filled rows | 12 of 16 |
+| Evidence-independent (structural) | 3 |
+| Evidence-bearing | 9 |
+| **Stale on the arm under test** | **4 of 9 (44%)** — all arm C at `v10.0.0`, three behind |
+| Stale on the Editor | 12 of 12 — every trial ran on `6000.5.5f1`, two behind |
+| Claims re-verified, all time | 0 → **8** |
+| Claims carrying `[fixed in X]` | 0 → **1** |
+
+The Editor row is the blunt one: it will read near 100% permanently, because the Editor moves
+faster than trials are run. It is honest and nearly useless. The arm-under-test number is the
+one that should be tracked.
+
+**The finding that matters is that staleness could never have caught the worst defect in the
+table.** The scene-graph row was wrong the day it was written; a claim that was never true has
+no version against which to expire, and its structural label exempted it from the staleness
+audit by construction. Sorted by whether a trial stands behind the row: **two of the five
+filled rows citing no trial were defective (40%)** — one wrong, one mislabelled — against
+**one of seven trial-backed rows**, whose defect was a misleading citation rather than a wrong
+verdict.
+
+So INVALIDATE needs a companion this loop does not have: **untested confidence** — filled rows
+carrying High or Medium confidence with no trial behind them. It stands at **5 → 3** after this
+pass, and the three that remain (install, licensing, headless) are genuinely architectural. It
+costs one pass over a column to compute, and it points at the class of defect staleness is
+structurally blind to.
+
 ### 2026-08-05 (evening) — six findings mined from an 8-hour session, and an instruments section
 
 Widening coverage the way the previous entry concluded it had to be widened: from a session
