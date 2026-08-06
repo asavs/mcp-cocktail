@@ -1081,14 +1081,27 @@ the same `CreateOne` helper in a synchronous loop — **structurally indistingui
 sequential single calls.** So "batch is safe, sequential collides" is not a possible
 explanation, and neither is a component-specific code path.
 
-**The collision is nondeterministic and sits below the package**, in the engine's `EntityId`
-allocation, which is not present as source under `PackageCache`. The decisive evidence is in
-T-003's own transcripts rather than in any new test: arm A received the identical id
-`568105589213729540` for three separate sequential CLI calls, then two correct distinct ids for
-the two real objects immediately afterwards — same session, same tool, same calling convention,
-minutes apart. That rules out arm, batch-vs-single, and GameObject-vs-component as
-discriminators. Arm B saw a root GameObject, a child GameObject and the child's Transform all
-echo `568105589213729500`.
+**`[superseded by T-005 — this paragraph was wrong]` The collision is not in the engine and is
+not nondeterministic.** This section concluded that `EntityId` allocation itself was racing,
+below the package and out of reach of source. T-005 refuted it by running arm C, which the
+earlier passes could not: **C emits the same field as a quoted JSON string and the values come
+back distinct** — `"568105589213729364"` and `"568105589213729346"`, eighteen apart. A and B
+emit it as a **bare JSON number**, and at that magnitude the value sits in `[2^58, 2^59)` where
+IEEE-754 double spacing is 2⁶ = **64**. Two ids eighteen apart therefore *cannot* survive a
+round trip through a double, and any client parsing JSON numbers as doubles — which is most of
+them — collapses them. **The engine distinguishes the objects correctly; Pipeline's serializer
+destroys the distinction on the way out.**
+
+It is deterministic in the value's *magnitude*, which is exactly why it looked intermittent:
+ids far enough apart survive, ids close together collide, and nothing about timing or call
+shape enters into it. Every observation the old paragraph called decisive is explained by this
+and none of it required a race.
+
+The source read that produced the wrong conclusion was not sloppy — `ObjectResolver.Describe`
+really is clean, and the C# really does read the right id off the right object. **The defect
+was one layer further out than the layer that was read**, in serialization to JSON, and the
+reading stopped at the boundary of the thing it had been pointed at. That is the same shape as
+every other miss in this record: the check was sound and aimed one layer short.
 
 **Correction to the record's own reasoning, which matters more than the bug.** The earlier
 re-test marked this `[not reproduced]` and explained away the one collision it *did* see —
@@ -1099,16 +1112,24 @@ rather than checked against the code that was sitting in `PackageCache` the whol
 single non-reproduction is not a negative result for an intermittent bug**, and
 `[not reproduced on X]` should not be written unless the attempt was repeated.
 
-**What would settle the mechanism**, not run here because it needs `eval`: in one session,
-create two objects mirroring `CreateOne` exactly and log `GetEntityId()` immediately for both;
-then repeat with a one-frame `EditorApplication.delayCall` between them. If the immediate pair
-collides and the delayed pair does not, it is a registration-latency race in `EntityId` itself.
-Correlate against the wall-clock gap between calls rather than against batch-vs-single — and
-note that if collisions cluster on *shorter* gaps, a tight batch loop would be worse than
-separate HTTP round-trips, the opposite of the obvious guess.
+**`[superseded]`** The delayed-vs-immediate `EditorApplication.delayCall` experiment proposed
+here would have measured nothing, because there is no race to catch. Left in place because the
+wrong hypothesis is instructive: it was falsifiable, it was cheap, and it was still aimed at
+the wrong layer. Running it would have returned a clean negative and been read as
+reassurance.
 
-**Actionable regardless of mechanism:** use `globalId` or `hierarchyPath`. Never key anything
-on `instanceId`.
+**What actually discriminated** cost nothing and needed no `eval`: **compare the ids as
+strings, not as numbers**, and run an arm that quotes the field. Two arms sharing a serializer
+cannot show you a serializer bug — the comparison only became possible once C ran, which is
+the concrete return on making the trial three-way after four attempts at two.
+
+**Actionable:** prefer `globalId` or `hierarchyPath`, which are unambiguous by construction.
+If you must read `instanceId`, take it from an arm that quotes it, and never let it pass
+through a JSON parser that maps numbers to doubles.
+
+**`[feedback]`** This is reportable against `com.unity.pipeline`: an identifier that routinely
+exceeds 2^53 is emitted as a bare JSON number, which JSON's own ubiquitous reading as IEEE-754
+double cannot represent. Quoting it, as CoplayDev does, is the fix.
 
 ### 2026-08-06 (later) — T-003, and four CLI traps found by running it
 
