@@ -969,10 +969,30 @@ external Python process and **never touches `Bridge`/`TransportManager`
 **Connect button in the MCP window** — which is what produced the last successful
 `Plugin registered:` line, dated 2026-07-29.
 
-So the corrected position on arm C, third revision in one day: it is not GUI-gated for
-*starting the server*, which scripts fine; it **is** GUI-gated for *registering the Editor*,
-unless `AutoStartOnLoad` is set ahead of time. Setting that pref before the Editor loads is
-the scriptable route and has not been tested.
+**Resolved: arm C is fully scriptable, and the deadlock was entirely the blocking, not the
+call.** `Bridge.StartAsync()` is the thing that registers the Editor, and it is safe when
+dispatched and discarded:
+
+```csharp
+var _ = MCPForUnity.Editor.Services.MCPServiceLocator.Bridge.StartAsync();  // do NOT await
+```
+
+`eval` returns immediately, the main thread goes free, and the continuation lands on it a
+moment later. Registration completes in a few seconds. **Verified end to end, not by a status
+field:** `instance_count` went 0 → 1, and a real `tools/call read_console` through the server
+returned that Editor's own log lines with `isError: false`. The Editor stayed responsive
+throughout.
+
+`AutoStartOnLoad` is a red herring for this. Tested directly: set to `true`, Editor fully
+restarted so the handler fires at load — the server did **not** come up and no registration
+occurred. Whatever that pref governs, it is not this.
+
+So the corrected position on arm C, **fourth revision in one day and the first one confirmed
+by a working call**: it is not GUI-gated at all. Server start and Editor registration are both
+scriptable, in that order, and `tools/trials/three-way-setup.sh` now does both. The three
+previous revisions each failed the same way — they concluded from a status signal (a bare
+port, a `Connected` row, an `instance_count`) instead of from a call that had to traverse the
+whole path. **The only trustworthy check of a transport is a message that had to cross it.**
 
 ### 2026-08-06 (last) — "GUI-gated" was wrong, and the real gate is the client
 

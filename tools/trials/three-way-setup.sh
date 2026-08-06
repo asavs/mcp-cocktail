@@ -148,6 +148,26 @@ fi
 
 if [ "$MODE" != "stop" ]; then
   inst="$(coplay_registered)"
+
+  # Starting the server does not register the Editor with it -- that path never touches
+  # Bridge/TransportManager. Nothing automated does it: AutoStartOnLoad does not (tested,
+  # on a fresh Editor start with the pref set), and ResumeHttpAfterReload only fires if the
+  # bridge was already running. The only other route is the Connect button in the MCP window.
+  #
+  # Bridge.StartAsync() does it, and is safe **only fire-and-forget**. Blocking on it with
+  # .GetAwaiter().GetResult() deadlocks the Editor permanently -- it awaits without
+  # ConfigureAwait(false) and eval runs on the main thread, so the continuation waits for the
+  # thread that is blocked. Task.Run does not help. Discard the task; do not await it.
+  if { [ -z "$inst" ] || [ "$inst" -eq 0 ] 2>/dev/null; } && [ "$MODE" = "start" ]; then
+    info "no Editor registered — dispatching Bridge.StartAsync (fire-and-forget)"
+    unity command eval --code 'var _ = MCPForUnity.Editor.Services.MCPServiceLocator.Bridge.StartAsync(); return "dispatched";' --json >/dev/null 2>&1
+    for _ in 1 2 3 4 5 6 7 8; do
+      inst="$(coplay_registered)"
+      [ -n "$inst" ] && [ "$inst" -gt 0 ] 2>/dev/null && break
+      sleep 3
+    done
+  fi
+
   if [ -n "$inst" ] && [ "$inst" -gt 0 ] 2>/dev/null; then
     ok "an Editor is registered with arm C's server (instance_count=$inst)"
   else
