@@ -97,22 +97,23 @@ coplay_up() {
 # Asks the server rather than the Editor, deliberately: the Editor can be internally wedged
 # while still reporting a stale cached "connected".
 coplay_registered() {
-  local hdr sid body
-  hdr="$(mktemp)"
-  curl -s -D "$hdr" -o /dev/null --max-time 8 -X POST "$COPLAY_URL/mcp" \
+  local init sid body
+  # -D - puts the response headers on stdout ahead of the body, so one capture gets both and
+  # there is no temp file to go missing.
+  init="$(curl -s -D - --max-time 10 -X POST "$COPLAY_URL/mcp" \
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
-    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"three-way-setup","version":"1"}}}' \
-    >/dev/null 2>&1
-  sid="$(grep -i '^mcp-session-id:' "$hdr" 2>/dev/null | tr -d '\r' | sed 's/^[^:]*: *//')"
-  rm -f "$hdr"
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"three-way-setup","version":"1"}}}' 2>/dev/null)"
+  sid="$(tr -d '\r' <<<"$init" | grep -i '^mcp-session-id:' | sed 's/^[^:]*: *//' | head -1)"
   [ -z "$sid" ] && { echo ""; return 1; }
   body="$(curl -s --max-time 8 -X POST "$COPLAY_URL/mcp" \
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
     -H "Mcp-Session-Id: $sid" \
     -d '{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"mcpforunity://instances"}}' 2>/dev/null)"
-  grep -oE '"instance_count"[^0-9]*[0-9]+' <<<"$body" | grep -oE '[0-9]+$' | head -1
+  # The resource's payload is a JSON *string* containing JSON, so the inner quotes arrive
+  # backslash-escaped: \"instance_count\": 0. Do not anchor on a literal quote character.
+  grep -oE 'instance_count[^0-9]*[0-9]+' <<<"$body" | grep -oE '[0-9]+$' | head -1
 }
 
 # A bound port is necessary but not sufficient — check the JSON-RPC endpoint answers.
