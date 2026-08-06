@@ -927,6 +927,31 @@ See issue #1 for the full write-up. Key findings:
 
 Newest first.
 
+### 2026-08-06 (last) — editing a file through the shell erases it from Claude Code's history
+
+Claude Code keeps per-file version snapshots under `~/.claude/file-history/<session-uuid>/`,
+and the session transcripts under `~/.claude/projects/<slug>/*.jsonl` record every `Write` and
+`Edit` call with its literal content or `old_string`/`new_string` pair. Together these make a
+file's history reconstructible even with no version control — a full 31-state history of a
+two-day-old unversioned file was rebuilt from them, validated by confirming the replay
+reproduces every independent snapshot byte-for-byte.
+
+**Both mechanisms only see the editing tools.** A file rewritten by a shell command — a Python
+splice, `sed -i`, a redirect — changes on disk with no snapshot and no transcript entry, and
+becomes an unbridgeable jump-cut in any later reconstruction. This is easy to hit precisely
+when it hurts most: bulk or structural edits are exactly the ones reached for a script, and
+exactly the ones whose intermediate states are worth having.
+
+Two practical consequences. **Version-control anything you care about**, rather than relying on
+file-history, which is incidental and per-session. And when a large restructure has to go
+through a script, **commit immediately before and after it**, so the jump-cut is bounded by two
+known states instead of swallowing them.
+
+A related discovery worth recording: file-history version numbering for a newly tracked file
+**starts at `@v2`, not `@v1`.** A missing `@v1` is the normal case and is not evidence that a
+snapshot was evicted — confirmed by matching a `@v2` snapshot to the originating `Write` call
+in the transcript, two seconds apart and byte-identical.
+
 ### 2026-08-06 (last) — the `instanceId` collision, resolved from source
 
 Installed source: `Library/PackageCache/com.unity.pipeline@f49636739437`, version
