@@ -76,8 +76,16 @@ the picture, and cite the trial.
 | Physics / geometry queries (raycasts, bounds) | **B** or **C**, via `eval` / `execute_code` | every introspection tool — the capability does not exist | Low | T3, 2026-07-28; serialized fields cannot answer what a cast returns — [Instruments](../UNITY-TOOLING-NOTES.md#read-only-c-probes-returning-a-table) |
 | Carrying on when the other MCP is down | **the other MCP** | A — shares B's failure domain | Low | T3; T-000 ran B→C, 2026-07-28 ran C→B |
 
-Most rows are empty on purpose. Six of the filled ones are **structural** —
-true by architecture, not worth a trial. The interesting rows are the `?`s.
+**Coverage: 12 of 16 rows filled.** Five of those are **structural** — true by architecture,
+not worth a trial — so seven rest on evidence, and the four `?`s are the interesting ones.
+`[count corrected 2026-08-05: the previous prose said six structural, against five in the
+table.]`
+
+None of the filled rows cites evidence newer than the installed versions, which is expected —
+evidence is produced by running what is installed. The number that matters is the other one:
+**three filled rows rest partly on arm C at `v10.0.0`, three releases behind the current
+`v10.1.2`** (GameObject authoring, physics/geometry queries, carrying on when the other MCP
+is down). Re-confirm those before treating them as current.
 
 ### Standing observations
 

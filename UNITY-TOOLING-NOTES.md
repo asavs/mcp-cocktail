@@ -961,6 +961,20 @@ arm C's `manage_scene` refusing on a dirty scene with no discard action, so the 
 is `execute_code` — is in the
 [anti-capabilities table](docs/tooling-scorecard.md#anti-capabilities).
 
+**Phase 2's measurement — matrix coverage, and it moved.** Filled rows went from **10 of 14
+(71%) to 12 of 16 (75%)**; both new rows are T3, and both were previously unaskable rather
+than unanswered, since neither use case had a row at all. Anti-capabilities went from 6 to 9.
+The companion number is worse than the coverage number: **no filled row cites evidence newer
+than the installed versions** — it cannot, evidence comes from running what is installed — and
+**three rest on arm C at `v10.0.0`, three releases behind `v10.1.2`.** That is an
+[INVALIDATE](#log) problem, not a coverage one, and it is the next binding constraint on this
+table rather than more rows.
+
+Method note, since it is the transferable part: two sessions have now been mined this way and
+both paid. It costs one script over `~/.claude/projects/<slug>/*.jsonl` and an afternoon, and
+it is the only source that shows what long sessions *actually do* rather than what the record
+happens to be about.
+
 ### 2026-08-05 (later) — a pattern layer, a corrected health check, and a retrieval measurement
 
 **A `/health` endpoint exists on CoplayDev's server, and the `406` advice was wrong.**
