@@ -73,6 +73,8 @@ the picture, and cite the trial.
 | Builds and test runs | ? | — | None | **Untested** — A and B both offer it |
 | Asset import / settings changes | ? | — | None | **Untested** |
 | Multi-client environments | **C** | — | Medium | 22 configurators vs ~16; structural |
+| Physics / geometry queries (raycasts, bounds) | **B** or **C**, via `eval` / `execute_code` | every introspection tool — the capability does not exist | Low | T3, 2026-07-28; serialized fields cannot answer what a cast returns — [Instruments](../UNITY-TOOLING-NOTES.md#read-only-c-probes-returning-a-table) |
+| Carrying on when the other MCP is down | **the other MCP** | A — shares B's failure domain | Low | T3; T-000 ran B→C, 2026-07-28 ran C→B |
 
 Most rows are empty on purpose. Six of the filled ones are **structural** —
 true by architecture, not worth a trial. The interesting rows are the `?`s.
@@ -108,6 +110,18 @@ Short version, with the detail living elsewhere — this file is for verdicts,
   `127.0.0.1:8080`; Unity's Pipeline listens on `0.0.0.0:7800` while reporting
   its own URL as `127.0.0.1`. On this one dimension C is the better-behaved
   server. [Detail](unity-mcp.md#security-notes).
+- **Running both has now paid in both directions, which is the case for the
+  setup cost.** T-000 recorded B being used to configure C. On 2026-07-28 the
+  reverse happened unplanned: Pipeline stopped serving mid-session and C
+  carried the rest of the work, including opening the scene B was needed for.
+  Neither server can repair the other — the recovery is still an Editor
+  restart — but neither outage was session-ending.
+  [Detail](../UNITY-TOOLING-NOTES.md#pipeline-can-drop-out-of-a-live-editor-session).
+  `[T3]`
+- **C's refusals are safe but have no escape hatch.** `manage_scene` declining
+  to load over unsaved changes is correct behaviour; having no `discard`
+  action means the only route past it is `execute_code`. See the
+  [anti-capabilities](#anti-capabilities).
 
 ### Anti-capabilities
 
@@ -121,6 +135,9 @@ forget because nothing errors — you just find out mid-task.
 | **B** | No terrain introspection — `TerrainData` size/bounds have no read-only route, pushing a read-only question toward `eval`. |
 | **C** | `set_property` echoes no state, so a write can vanish silently. |
 | **C** | Setup cannot be fully scripted (GUI-gated). Note: `ClientConfigurationService.ConfigureAllDetectedClients()` *is* a public method already called non-interactively, so the capability exists — what is missing is a shipped headless entrypoint. "Impossible" overstates it. |
+| **C** | `manage_scene` cannot **discard** an unsaved scene — its actions are `save` / `load` / `create` / `get_*`. `load` refuses over unsaved changes (correct), so a dirty scratch scene blocks all navigation and the only way through is `execute_code`, i.e. the always-ask tier, for what should be routine. `[feedback]` `[T3]` |
+| **B** | Nothing outside the Editor can restart Pipeline once its editor assembly has dropped out — its menu items go with it, so `execute_menu_item` has nothing to call. Recovery is an Editor restart, by hand. [Detail](../UNITY-TOOLING-NOTES.md#pipeline-can-drop-out-of-a-live-editor-session). |
+| **B/C** | Neither exposes any **physics or geometry query** — no raycast, no collider bounds, no mesh extents. Introspection reads serialized fields, which cannot answer what a cast returns. Pushes a read-only question into `eval` / `execute_code`. |
 | **A/B** | Nothing scene-level without a running Editor — and they share one failure domain. |
 
 ### Watch-list
