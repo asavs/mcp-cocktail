@@ -110,15 +110,37 @@ def arm_of(name: str, payload: str) -> str | None:
     return None
 
 
+# A session that is *about* the record will consult the record, and measuring
+# retrieval there reports success while the real failure mode goes unobserved.
+# Same for a session standing the tooling up: that phase is already covered
+# exhaustively and each machine passes through it once. Both must be excluded
+# from sampling, and both look identical to a naive rank-by-Unity-usage sweep --
+# which is exactly the mistake that produced three useless candidates the first
+# time this ran.
+SELF_REF = re.compile(r"UNITY-TOOLING-NOTES|tooling-scorecard|tooling-experiment|unity-tooling", re.I)
+SETUP = re.compile(r"\b(install|installing) (the )?(latest )?unity\b|unity cli\b.*\binstall|"
+                   r"\bset ?up the (mcp|editor|pipeline)\b", re.I)
+
+
 def summarise(path: Path) -> dict:
     tools: Counter = Counter()
     arms: Counter = Counter()
     turns = 0
     chars = 0
+    selfref = 0
+    setupish = False
+    first_user = ""
     for _, role, kind, name, text in blocks(path):
         chars += len(text)
+        if SELF_REF.search(text):
+            selfref += 1
         if kind == "text" and role == "user":
             turns += 1
+            t = " ".join(text.split())
+            if not first_user and t and not t.startswith(("<", "[SYSTEM", "Caveat")):
+                first_user = t[:120]
+                if SETUP.search(t):
+                    setupish = True
         if kind == "tool_use":
             tools[name] += 1
             a = arm_of(name, text)
@@ -127,6 +149,7 @@ def summarise(path: Path) -> dict:
     return {
         "path": path, "turns": turns, "calls": sum(tools.values()),
         "tools": tools, "arms": arms, "unity": sum(arms.values()), "chars": chars,
+        "selfref": selfref, "setup": setupish, "first_user": first_user,
     }
 
 
@@ -138,16 +161,26 @@ def cmd_sweep(args):
         except OSError:
             continue
     rows.sort(key=lambda r: (-r["unity"], -r["calls"]))
-    print(f"{'session':<38} {'turns':>6} {'calls':>7} {'unity':>6}  arms")
-    print("-" * 86)
+    print(f"{'session':<38} {'turns':>6} {'calls':>7} {'unity':>6} {'flag':<10} arms")
+    print("-" * 96)
+    usable = 0
     for r in rows[:40]:
         if not r["calls"]:
             continue
+        flag = "SETUP" if r["setup"] else ("self-ref" if r["selfref"] > 20 else "")
+        if r["unity"] and not flag:
+            usable += 1
         arms = " ".join(f"{k}={v}" for k, v in sorted(r["arms"].items())) or "-"
-        print(f"{r['path'].stem:<38} {r['turns']:>6} {r['calls']:>7} {r['unity']:>6}  {arms}")
-    print("\nRank is mechanical, not by recall. A session with high `unity` and many")
-    print("turns is a long multi-goal session that actually drove the Editor — the")
-    print("sample this record asks for and has never once taken.")
+        print(f"{r['path'].stem:<38} {r['turns']:>6} {r['calls']:>7} {r['unity']:>6} {flag:<10} {arms}")
+    print(f"\nUnflagged sessions that drove Unity: {usable}")
+    print("Rank is mechanical, not by recall — a human remembers the memorable ones,")
+    print("which is the opposite of the drifting sessions the failure mode lives in.")
+    print("SETUP    = standing the tooling up. That phase is already documented to")
+    print("           exhaustion and each machine passes through it once.")
+    print("self-ref = the session is about the record, so it consults the record and")
+    print("           any retrieval measurement taken there is meaningless.")
+    print("Both look identical to a naive rank-by-usage sweep. Exclude them, and if")
+    print("that leaves nothing, the honest report is that the sample does not exist.")
 
 
 def cmd_stats(args):
