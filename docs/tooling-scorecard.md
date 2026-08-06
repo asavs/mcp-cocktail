@@ -67,7 +67,7 @@ the picture, and cite the trial.
 | Invoking Editor menu items | **B** | — | Medium | T-000; `menu` executed and listed all 873 items |
 | Editor lifecycle (quit, play mode) | **B** | — | Low | T-000; `File/Exit` worked but errored on response as the server died |
 | Scripted / repeatable setup | **A** | — | Medium | T-000; every CLI step was reproducible, GUI steps were not |
-| GameObject authoring | **A**, **B** or **C** | — | Medium | T-003 added A, which authors as well as it inspects; T-001 covered B and C. No winner on step count across all three |
+| GameObject authoring | **B** | — | Medium | T-004: B finished in 11 calls with zero errors; A finished in 23 with two **silent** no-ops and one 400. A is fine *with* a verify-every-write discipline — it authors as well as it inspects (T-003). **C unverified since T-001** at `v10.0.0`; it has now failed to run in four consecutive attempts |
 | Prefab authoring | ? | — | None | **Untested** |
 | Script creation + attach + recompile | ? | — | None | **Untested** |
 | Builds and test runs | ? | — | None | **Untested** — A and B both offer it |
@@ -108,6 +108,13 @@ carrying on when the other MCP is down, and **multi-client environments**. The l
 omitted from the previous count because its "structural" label exempted it; a count of files
 shipped in one release is a version fact and expires like any other.
 
+**`[T-004, 2026-08-06: all four are still stale, and the installed package is still v10.0.0.]`**
+T-004 was run to refresh them and could not: C's plugin is not attached to its server, so no
+Editor-bound call executed. Note the version claim is now confirmed rather than assumed — the
+Python server self-reports `10.0.0` and `Packages/manifest.json` pins `#v10.0.0`, while the
+package's own update check records `10.1.2` as current. **Anything in this file attributed to
+arm C describes v10.0.0 behaviour observed on 2026-07-28 and has not been re-measured since.**
+
 The earlier observation that "no filled row cites evidence newer than the installed versions"
 is tautological — evidence is produced by running what is installed — and must not be read as
 reassurance about the remaining rows.
@@ -124,6 +131,13 @@ Short version, with the detail living elsewhere — this file is for verdicts,
   count them as Editors. The failure mode is real but narrower than "A fails quietly"
   suggests; treat it as a hazard to check for, not a property to assume.
   [Detail](unity-cli.md#scripting-the-cli).
+  **`[widened by T-004]` That re-audit covered *connection* failure, which is loud. *Argument*
+  failure is silent, and the softening does not reach it.** `set_transform --position 1,2,3`
+  and `--position 1 --position 2 --position 3` both return exit 0 and `"success": true` and
+  change nothing; only `--position '[1,2,3]'` lands. The payloads of the two no-ops and the
+  successful write are the same shape, so neither the exit code nor `success` distinguishes
+  them. So: A fails loudly when it cannot reach Pipeline, and quietly when Pipeline cannot
+  parse an argument. Verify every write.
 - **`[corrected by T-003]` B's mutating calls mostly echo *identity*, not state.**
   The earlier form of this said B echoes the resulting state and C does not, so confirmation
   was free on B. T-003 measured it directly and it is not so: `create_gameobject`,
@@ -131,6 +145,11 @@ Short version, with the detail living elsewhere — this file is for verdicts,
   — `set_transform`'s response contains no `position` field at all. `set_component_properties`
   is the one exception and does echo the resulting property map. So read state back on **both**
   arms; B is better than C here by one tool, not by policy.
+  **`[reconfirmed by T-004, and extended to A]`** T-004 reproduced B's split exactly — 3 of 4
+  identity-only, `set_component_properties` the lone echo. It also measured **A for the first
+  time: 0 of 8 mutating calls echo state.** `create_gameobject`, `set_transform`,
+  `add_component` and `set_serialized_field` all return the same identity block. So B beats A
+  here by exactly one tool, the same margin by which it beats C.
 - **`[feedback]` The `instanceId` collision is an engine-level `EntityId` issue, not a
   Pipeline one — and the field is misnamed.** Source-confirmed in
   `com.unity.pipeline@f49636739437`: on Editor 6000.4+ `PipelineUtils.GetObjectId` returns
@@ -155,6 +174,14 @@ Short version, with the detail living elsewhere — this file is for verdicts,
   clean negative. A nondeterministic bug that failed to appear once was read as evidence of
   absence, and the reassuring interpretation was reached for rather than checked. Kept as
   written; see the entry above for the resolved mechanism.
+  **`[T-004 settles this empirically]`** The supersession above rested on source-reading; it no
+  longer has to. In T-004 arm B, **all four** objects — root GameObject, child GameObject, its
+  Transform, its BoxCollider — returned the identical `568105589213729200` against four
+  distinct `globalId`s. Arm A saw three of four share one id. The collision is real, reproduces
+  at both GameObject and component granularity, and discriminates nothing. **Also new: the
+  value exceeds 2^53**, so any client round-tripping it through a double corrupts it — the
+  differing trailing digits across arms (`…729300` / `…729200`) are rounding artifacts, not
+  data.
 - **B has the better safety model** (`confirm=true`, `dry_run`, path
   confinement) — and ships `eval`/`eval_file`, which bypass all of it.
   [Detail](unity-mcp.md#security-notes).
@@ -178,6 +205,16 @@ Short version, with the detail living elsewhere — this file is for verdicts,
   session already running, however cheaply its server starts. This is why C has never appeared
   in a trial run from an existing session, and it is scriptable — register, then start a fresh
   session — rather than needing a human.
+  **`[incomplete — T-004 cleared this gate and hit a second one]`** T-004 ran from a fresh
+  session with C registered; the tools loaded and the server answered. C still could not
+  execute a single Editor-bound call. **The Unity-side plugin does not attach to its own
+  server**, silently: `active_instance: null`, `all_keys_in_store: []`, `instance_count: 0`,
+  last successful `Plugin registered:` dated 2026-07-29. The Editor *starts* the server and
+  then never dials in, and with `MCPForUnity.DebugLogs = 0` (the default) it logs nothing
+  about the connection it failed to make. So there are **two** gates, and only the first is
+  scriptable — this one needs Editor-side action. **A server that answers is not an arm that
+  works;** check `mcpforunity://instances` for a non-zero `instance_count` before assuming
+  otherwise. `debug_request_context` is the only call that reveals it.
 - **B can be allowlisted read-only, C mostly can't** — 44 of 140 vs 9 of 47,
   because a permission rule can only be as precise as the tool it names.
   [Detail](#tool-surfaces-at-a-glance).
@@ -213,6 +250,9 @@ forget because nothing errors — you just find out mid-task.
 | **C** | `manage_scene` cannot **discard** an unsaved scene — its actions are `save` / `load` / `create` / `get_*`. `load` refuses over unsaved changes (correct), so a dirty scratch scene blocks all navigation and the only way through is `execute_code`, i.e. the always-ask tier, for what should be routine. `[feedback]` `[T3]` |
 | **B** | Nothing outside the Editor can restart Pipeline once its editor assembly has dropped out — its menu items go with it, so `execute_menu_item` has nothing to call. Recovery is an Editor restart, by hand. [Detail](../UNITY-TOOLING-NOTES.md#pipeline-can-drop-out-of-a-live-editor-session). |
 | **B/C** | Neither exposes any **physics or geometry query** — no raycast, no collider bounds, no mesh extents. Introspection reads serialized fields, which cannot answer what a cast returns. Pushes a read-only question into `eval` / `execute_code`. |
+| **A** | Cannot report whether a write landed. **0 of 8** mutating calls echo state (T-004), and a malformed array argument is **dropped silently** — exit 0, `"success": true`, nothing changed. The success payload is indistinguishable from a real write. Every mutation needs its own read-back. |
+| **A** | No per-tool help. `unity command <tool> --help` prints generic usage; the only schema source is the ~115 KB `parameters` array in `unity list --json`, and it does not say which JSON encoding a vector parameter wants — `set_transform --position` needs `[1,2,3]`, `set_serialized_field --value` needs `{"x":..}`. |
+| **C** | Cannot tell you it is disconnected. Server-only tools (`debug_request_context`, `manage_tools`) answer normally while every Editor-bound call fails, so the server looks healthy from the client. Each failure blocks ~20s and returns `retry_after_ms: 250` with `hint: "retry"` — backpressure phrasing for a permanent condition. `[T-004]` |
 | **A/B** | Nothing scene-level without a running Editor — and they share one failure domain. |
 
 ### Watch-list
@@ -316,6 +356,132 @@ authoring trial is for.
 ## Trials
 
 Newest first. Template at the bottom.
+
+### T-004 — the same authoring task, first attempt at a genuine three-way
+
+**Date** 2026-08-06 · **Category** authoring · **Mutating** yes ·
+**Versions** CLI `1.0.0-beta.3`, Editor `6000.5.5f1`, Pipeline `0.4.0-exp.1`,
+MCP for Unity `v10.0.0` (server self-reported; `LatestKnownVersion` = `10.1.2`)
+
+Third run of the T-001 task — root empty, child empty at local `(1, 2, 3)`, `BoxCollider`
+with size `(2, 2, 2)` — named `T004-Root-<arm>` / `T004-Child-<arm>` per arm. Blind and
+serial, one subagent per arm, each writing its own account before any comparison:
+[arm-a.md](trials/T-004/arm-a.md) · [arm-b.md](trials/T-004/arm-b.md) ·
+[arm-c.md](trials/T-004/arm-c.md). Objects deleted afterwards and confirmed gone by
+read-back; scene never saved.
+
+| Arm | Outcome | Steps | Friction | Verifiable? |
+|---|---|---|---|---|
+| A CLI | completed | 23 (17 `unity command`, of which 6 were pure read-back) | 3 encodings for `position`, 2 for `m_Size`; two **silent** no-ops | Only by separate read — **0 of 8** mutating calls echoed state |
+| B MCP official | completed | 11 editor calls + 2 schema loads | none — zero errors, zero retries | Mostly by separate read — 1 of 4 mutating calls echoed state |
+| C MCP CoplayDev | **blocked** | 12 calls, 2 succeeded | every Editor-bound call returned `no_unity_session` after a 20s block | N/A — nothing was created |
+
+**This is still not a three-way trial.** Arm C failed for the *fourth* consecutive attempt,
+and this time **not for the reason the record predicts.**
+
+**A new gate on C, distinct from the known one.** The standing observation says C's real
+obstacle is the client — [P1, reads-once-at-startup](../UNITY-TOOLING-NOTES.md#p1--reads-once-at-startup)
+— an MCP server must be registered before the session begins. That gate was **cleared** here:
+the session started with C registered, `mcp__UnityMCP__*` loaded, and the server answered.
+A different gate bit. The **Unity-side plugin is not attached to its own server**:
+
+```json
+{"success":false,"error":"Unity session not available; please retry",
+ "data":{"reason":"no_unity_session","retry_after_ms":250},"hint":"retry"}
+```
+
+`debug_request_context` shows `plugin_hub_configured: true`, `active_instance: null`,
+`all_keys_in_store: []`; `mcpforunity://instances` reports `instance_count: 0`. The last
+successful `Plugin registered:` line in the server log is dated **2026-07-29** — the plugin
+has not connected across three later server sessions. The Editor started the server itself
+(`MCP-FOR-UNITY: Starting local HTTP server…` in its own log) and then never dialled into
+`127.0.0.1:8080`; confirmed by socket inspection and a 150s poll. `DebugLogs = 0` is why this
+is silent in the Unity console. Recovery is Editor-side only (MCP window reconnect, domain
+reload, or restart), so the arm ends blocked rather than failed.
+
+Verified independently by the coordinator after the arm reported: `debug_request_context`
+returned the same empty instance store, and a read-only `find_gameobjects` returned the same
+error verbatim. **This is a property of the setup, not an agent error.**
+
+**`three-way-setup.sh --check` gives a false pass on arm C.** It reported *"ok — server
+already answering at `http://127.0.0.1:8080/mcp` (HTTP 406)"* and *"All three arms are up."*
+An answering HTTP server is not an attached plugin. The check must additionally require
+`instance_count > 0` from `mcpforunity://instances`, or every future trial will spend an arm's
+budget rediscovering this. **`[open — the script is unchanged]`**
+
+**The three open questions about C are unanswered, and that is absence of evidence, not
+evidence.** No mutating call reached Unity, so nothing was learned about (1) whether C needs
+`m_Size` or accepts the public `size` — the public-name form *was* issued and died at the
+transport layer; (2) whether C echoes state or identity; (3) whether C hits the `instanceId`
+collision. **All arm-C claims in this file still rest on `v10.0.0` evidence from T-001, now
+three releases stale, and T-004 did not refresh any of them.**
+
+**First real step-count separation between A and B — with a caveat that matters.** 23 versus
+11. But A's excess is almost entirely *first-time argument-encoding discovery*: three attempts
+at `position`, two at `m_Size`, and six read-backs that existed only because nothing echoes.
+A second A run knowing the encodings would land near 12. So this separates the arms on
+**cost of the first correct call**, not on inherent verbosity — which is the cost an agent
+without this file actually pays.
+
+**Arm A fails silently on well-formed-looking arguments, which widens a standing observation
+rather than confirming it.** The known trap was that only `--flag value` binds. T-004 found
+worse: a **correctly named flag with the wrong value encoding is also dropped silently.**
+
+```
+unity command set_transform --target /T004-Root-A/T004-Child-A --position 1,2,3 --json
+```
+→ exit 0, `"success": true`, echo `"position": "1,2,3"`, and `m_LocalPosition` still
+`{x:0,y:0,z:0}`. Repeating the flag (`--position 1 --position 2 --position 3`) also returns
+success, with the echo showing `"position": 3` — last flag wins, as a scalar. Only
+`--position '[1,2,3]'` landed. **The success payload is byte-identical in shape across the two
+no-ops and the write that worked**, so exit code and `success: true` carry no information about
+whether the value arrived. This partially rolls back the 2026-08-06 softening of "A fails
+quietly": that re-audit was about *connection* failures, which are indeed loud (exit 6). This
+is *argument* failure, which is silent. Both are true; they are different failure classes.
+
+**Two neighbouring tools want two different `Vector3` encodings, and the schema says neither.**
+`set_transform --position` takes `[1,2,3]` and rejects the object form; `set_serialized_field
+--value` for a Vector3 takes `{"x":2,"y":2,"z":2}` and rejects the array with the trial's one
+loud error, exit 6: `Pipeline server returned 400 Bad Request: Parameter Validation Failed.
+Expected a JSON object with named components (e.g. { "x": 0 }) but received a 'Array'.` The
+`parameters` array in `unity list --json` distinguishes them only by prose description.
+
+**`m_Size` over `size` reconfirmed on both A and B** — third trial running. Not news; recorded
+so the pattern is not re-derived a fourth time.
+
+**The `instanceId` collision is reproduced, and it is total.** On B, all four objects — root
+GameObject, child GameObject, its Transform, its BoxCollider — returned the **identical**
+`568105589213729200` against four distinct `globalId`s. On A, three of four shared
+`568105589213729300`. This is direct empirical confirmation of the entry that was previously
+marked *"not reproduced"* and then superseded on source-reading alone; it no longer rests on
+source-reading alone. **New on top of that: the value exceeds 2^53**, so the trailing digits
+(`…729300` vs `…729200`) are IEEE-754 double-rounding artifacts, not real values — the field is
+lossy in transit as well as misnamed and non-discriminating.
+
+**B's verification asymmetry reconfirmed exactly as T-003 corrected it.** 3 of B's 4 mutating
+calls returned identity only; `set_component_properties` alone echoed the post-write property
+map. **A is strictly worse on this axis than B**, which is new: A has *no* echoing mutator at
+all, so B beats A here by exactly one tool. Budget one read per write on both.
+
+**Verdict** — **B for this task, on friction rather than capability.** B completed with zero
+errors and zero retries; A completed but paid five failed or ineffective calls, two of which
+announced nothing. Both produce identical correct scenes, so this is not a capability verdict.
+C remains unmeasured since T-001.
+
+**Matrix changes** — *GameObject authoring* re-rated: **B** preferred, A workable with a
+verify-every-write discipline, C's inclusion demoted to unverified-since-T-001. Confidence
+held at Medium, not raised, because the arm that would have made this a three-way did not run.
+
+**Follow-ups**
+- **Fix `three-way-setup.sh --check` to require `instance_count > 0`.** It currently passes an
+  arm that cannot execute a single Editor-bound call.
+- Recover C's plugin attachment — Editor-side, needs a human or an Editor restart. Until then
+  a three-way trial is not runnable and the four `v10.0.0`-dependent rows stay stale.
+- Turn on `MCPForUnity.DebugLogs` before the next attempt; the failure is silent without it.
+- Does A's silent argument-drop affect other array-typed (`single[]`, `jobject`, `jtoken`)
+  parameters, or only `set_transform`? A survey would be cheap and is worth more than another
+  authoring run.
+- Prefab authoring and script-create-attach-recompile, still untested after four trials.
 
 ### T-003 — T-001 re-run, this time including arm A
 
