@@ -1127,9 +1127,43 @@ the concrete return on making the trial three-way after four attempts at two.
 If you must read `instanceId`, take it from an arm that quotes it, and never let it pass
 through a JSON parser that maps numbers to doubles.
 
-**`[feedback]`** This is reportable against `com.unity.pipeline`: an identifier that routinely
-exceeds 2^53 is emitted as a bare JSON number, which JSON's own ubiquitous reading as IEEE-754
-double cannot represent. Quoting it, as CoplayDev does, is the fix.
+**`[amended same day — the cross-arm half of this was over-claimed]`** Two things above need
+narrowing, and the narrowing matters because the *observed* fact got stronger while the
+*explanation* got weaker.
+
+**What is directly observed, and is reproducible in two commands.** `unity command
+create_gameobject --name X --json`, run twice, returns two objects with **distinct `globalId`s
+and an identical `instanceId`** — and the identical digits are present **in the raw response
+text**, before any client parses them. So the loss happens inside Pipeline, not in a client's
+JSON parser. That is a stronger and simpler bug than the one first written up here. Observed
+values: `568105589213729300` for both of two objects; `create_gameobjects --count 2` gave
+`568105589213729340` for both.
+
+**What was inferred and should not have been stated as fact.** The claim that CoplayDev
+"emits the same `EntityId` values as quoted strings" is **not confirmed and is partly
+contradicted.** Arm C's `manage_gameobject create` returns `"instanceID": -28206` — a small
+negative int, i.e. the *classic* `GetInstanceID()`, under a differently-cased field name. That
+is a **different identifier**, not the same one quoted. Whether some other arm-C path also
+surfaces the ulong `EntityId` is unresolved; both may exist. Until someone reads the same
+identifier for the same object through both arms, "same value, different encoding" is a story,
+not a measurement.
+
+The mechanism — a `ulong` passing through a `double` server-side — remains the best available
+explanation and is supported by the shape of the digits: `568105589213729340` is not itself an
+exactly representable double (the nearest is `…344`), which is what a `double` formatted to 17
+significant digits looks like rather than what an exact integer looks like. **Inference, not
+observation.** It has not been checked against the serializer's source, and the layer-short
+error has already been made twice on this one finding.
+
+**`[feedback]`** Reportable against `com.unity.pipeline`. Draft at
+`docs/upstream/2026-08-06-pipeline-entityid-json-precision.md`, written to rest only on the
+directly observed collision and to mark the mechanism as inference.
+
+**The pattern, third time on this single finding.** Engine race → client-parse precision loss →
+server-side precision loss. Each account was reached by explaining the evidence in hand rather
+than by producing the one observation that would separate the candidates, and each was more
+confident than its evidence. The separating observation here cost two commands and existed the
+whole time.
 
 ### 2026-08-06 (later) — T-003, and four CLI traps found by running it
 
