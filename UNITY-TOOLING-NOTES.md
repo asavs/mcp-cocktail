@@ -927,6 +927,57 @@ See issue #1 for the full write-up. Key findings:
 
 Newest first.
 
+### 2026-08-06 (last) — the `instanceId` collision, resolved from source
+
+Installed source: `Library/PackageCache/com.unity.pipeline@f49636739437`, version
+`0.4.0-exp.1`, identical hash in both checkouts — the same code ran every trial, so there is
+no version drift to blame for the inconsistent observations.
+
+**The field named `instanceId` is not an instance id.** `Runtime/Common/PipelineUtils.cs:137`
+returns `obj.GetEntityId()` under `UNITY_6000_4_OR_NEWER`, falling back to `GetInstanceID()`
+only on older Editors. On `6000.5.5f1` it is always the former. `EntityId` is Unity's new
+ulong-backed identity type that formally replaces the classic instance id from 6000.4, and the
+package's own comment flags the migration as in progress. `ObjectIdConverter.WriteJson` writes
+`RawValue` unchanged. **The JSON name is a holdover that promises something the value is not**,
+which is worth knowing before anyone reasons about the number.
+
+**The package is not the bug.** `Editor/Authoring/ObjectResolver.cs:154-190` constructs a fresh
+`AuthoringResult` per call and reads the id off the object in scope. No pooling, no static
+buffer, no reused DTO. Every create/modify command in `GameObjectCommands.cs` and
+`ComponentCommands.cs` funnels through it identically, and `create_gameobjects` (batch) calls
+the same `CreateOne` helper in a synchronous loop — **structurally indistinguishable from N
+sequential single calls.** So "batch is safe, sequential collides" is not a possible
+explanation, and neither is a component-specific code path.
+
+**The collision is nondeterministic and sits below the package**, in the engine's `EntityId`
+allocation, which is not present as source under `PackageCache`. The decisive evidence is in
+T-003's own transcripts rather than in any new test: arm A received the identical id
+`568105589213729540` for three separate sequential CLI calls, then two correct distinct ids for
+the two real objects immediately afterwards — same session, same tool, same calling convention,
+minutes apart. That rules out arm, batch-vs-single, and GameObject-vs-component as
+discriminators. Arm B saw a root GameObject, a child GameObject and the child's Transform all
+echo `568105589213729500`.
+
+**Correction to the record's own reasoning, which matters more than the bug.** The earlier
+re-test marked this `[not reproduced]` and explained away the one collision it *did* see —
+three components on one GameObject sharing an id — as "a different and plausibly correct
+behaviour." The source does not support that reading. A nondeterministic defect that failed to
+appear once was recorded as evidence of absence, and the benign interpretation was reached for
+rather than checked against the code that was sitting in `PackageCache` the whole time. **A
+single non-reproduction is not a negative result for an intermittent bug**, and
+`[not reproduced on X]` should not be written unless the attempt was repeated.
+
+**What would settle the mechanism**, not run here because it needs `eval`: in one session,
+create two objects mirroring `CreateOne` exactly and log `GetEntityId()` immediately for both;
+then repeat with a one-frame `EditorApplication.delayCall` between them. If the immediate pair
+collides and the delayed pair does not, it is a registration-latency race in `EntityId` itself.
+Correlate against the wall-clock gap between calls rather than against batch-vs-single — and
+note that if collisions cluster on *shorter* gaps, a tight batch loop would be worse than
+separate HTTP round-trips, the opposite of the obvious guess.
+
+**Actionable regardless of mechanism:** use `globalId` or `hierarchyPath`. Never key anything
+on `instanceId`.
+
 ### 2026-08-06 (later) — T-003, and four CLI traps found by running it
 
 Versions: CLI `1.0.0-beta.3`, Editor `6000.5.5f1`, Pipeline `0.4.0-exp.1`. Trial writeups in

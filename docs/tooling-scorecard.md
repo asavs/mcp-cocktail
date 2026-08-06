@@ -131,19 +131,30 @@ Short version, with the detail living elsewhere — this file is for verdicts,
   — `set_transform`'s response contains no `position` field at all. `set_component_properties`
   is the one exception and does echo the resulting property map. So read state back on **both**
   arms; B is better than C here by one tool, not by policy.
-- **`[reproduced on Pipeline 0.4.0-exp.1, contradicting the earlier re-test]`** T-003 saw B
-  echo the **same `instanceId` for two distinct GameObjects** and for a Transform component,
-  while `globalId` and `hierarchyPath` stayed correct and distinct throughout. The standing
-  entry below records a re-test that returned four distinct ids and marked this
-  `[not reproduced]`. Both observations are now in the record; the conditions that separate
-  them are not known. `hierarchyPath` remains the handle that is unambiguous by construction —
-  which is the actionable part either way.
-- **`[not reproduced on Pipeline 0.4.0-exp.1]`** T-001 recorded that B repeats one
-  `instanceId` across distinct objects. A re-test returned four distinct ids for four
-  distinct GameObjects. Three *components on one GameObject* did share an id while their
-  `globalId`s differed, which is a different and plausibly correct behaviour. Superseded,
-  not deleted — the T-001 entry below is left as written. `hierarchyPath` remains the
-  handle that is unambiguous by construction, so prefer it regardless.
+- **`[feedback]` The `instanceId` collision is an engine-level `EntityId` issue, not a
+  Pipeline one — and the field is misnamed.** Source-confirmed in
+  `com.unity.pipeline@f49636739437`: on Editor 6000.4+ `PipelineUtils.GetObjectId` returns
+  `Object.GetEntityId()`, Unity's new ulong-backed `EntityId` that replaces the classic
+  instance id. The JSON field name `instanceId` is a holdover from the pre-`EntityId` design,
+  so the name promises something the value is not. The package's own code is clean —
+  `ObjectResolver.Describe` builds a fresh POCO per call and reads the id off the object in
+  scope, with no pooling or shared buffer, and the batch create path is structurally identical
+  to N sequential single creates. **The collision is nondeterministic and sits below the
+  package.** Decisive evidence is in T-003's own data: arm A received one identical id for
+  three separate sequential calls and then two correct distinct ids immediately afterwards, in
+  the same session with the same tool and calling convention — which rules out arm,
+  batch-vs-single, and GameObject-vs-component as discriminators. **Use `globalId` or
+  `hierarchyPath`; never key anything on `instanceId`.**
+- **`[superseded 2026-08-06 — this entry's "not reproduced" verdict was wrong]`** T-001
+  recorded that B repeats one `instanceId` across distinct objects. A re-test returned four
+  distinct ids for four distinct GameObjects and this was marked not reproduced. That re-test
+  also saw three *components on one GameObject* share an id while their `globalId`s differed,
+  and called it "a different and plausibly correct behaviour" — **the source does not support
+  that.** `Describe()` calls `GetObjectId()` independently per component with no aliasing
+  logic, so three components sharing an id is the same defect at component granularity, not a
+  clean negative. A nondeterministic bug that failed to appear once was read as evidence of
+  absence, and the reassuring interpretation was reached for rather than checked. Kept as
+  written; see the entry above for the resolved mechanism.
 - **B has the better safety model** (`confirm=true`, `dry_run`, path
   confinement) — and ships `eval`/`eval_file`, which bypass all of it.
   [Detail](unity-mcp.md#security-notes).
