@@ -25,9 +25,11 @@ in [docs/unity-cli.md](docs/unity-cli.md) and
   - [Unity official](#unity-mcp) — registration, Connected-but-zero-tools
   - [The tool surface](#unity-official-the-tool-surface-once-pipeline-is-live) — 140 tools, safety model, `eval`, `0.0.0.0` binding
   - [Sequencing gotcha](#sequencing-gotcha-cost-us-two-restarts) — install → Editor restart → import → tools appear
+  - [Pipeline can drop out mid-session](#pipeline-can-drop-out-of-a-live-editor-session) — the port moves, the old socket lingers
   - [CoplayDev MCP for Unity](#coplaydev-mcp-for-unity-comcoplaydevunity-mcp) — uv/PATH, stale README, client list
   - [Running both servers at once](#running-both-servers-at-once)
-- [Authoring, assets and animation](#authoring-assets-and-animation) — humanoid import, edit-mode sampling, asset integrity
+- [Authoring, assets and animation](#authoring-assets-and-animation) — humanoid import, edit-mode sampling, asset integrity, physics against a `Plane`
+- [Instruments](#instruments) — installed package source, read-only C# probes
 - [Git / UnityYAMLMerge](#git--unityyamlmerge) — driver placeholders, partial-config fatal
 - [Log](#log) — dated session entries, newest first
 
@@ -165,6 +167,7 @@ port that should be bound, the XML that should exist.
 | 2 | `hasPipelinePackage: true` with `isReachable: false` — the manifest entry exists, the Editor never resolved it | [Sequencing gotcha](#sequencing-gotcha-cost-us-two-restarts) |
 | 3 | CoplayDev's green client row proves only **configured**. Separately: listening, and loaded by the client | [unity-mcp.md](docs/unity-mcp.md#verify-and-recover) |
 | 4 | `isRunning: true` with `isReachable: false` and no Editor at all — see P2/4 | [Log 2026-08-05](#2026-08-05--a-fourth-confident-wrong-answer-a-startup-snapshot-pattern-and-a-version-audit) |
+| 5 | A **bound** `0.0.0.0:7800` owned by the live Editor, refusing every connection — a stale listener from a dead Pipeline instance, while the live server had moved to 7801. `401` proves a server; *bound* proves only a socket | [Pipeline can drop out](#pipeline-can-drop-out-of-a-live-editor-session) |
 
 Every intermediate broken state in this stack reports success *somewhere*. That is what
 makes an out-of-order setup look like a broken install.
@@ -528,6 +531,45 @@ Connected, `pipeline list` says `hasPipelinePackage: true`, and only
 grep for `true` matches the wrong one and reports ready when nothing is. Use
 `pipelineServer.isReachable` from `--json`.
 
+### Pipeline can drop out of a live Editor session
+
+**`[reproduced]`** Pipeline `0.4.0-exp.1` served an entire authoring trial and then stopped
+serving in the *same* Editor session — no restart, no crash, no console error. The first
+sign was an MCP client error naming a port nobody had configured:
+
+```
+Cannot connect to Unity Editor Pipeline server at 127.0.0.1:7801.
+```
+
+Five readings had to be assembled before the state was legible, and the first two are
+actively misleading:
+
+| Check | Reading | Alone, it says |
+|---|---|---|
+| `Get-Process Unity` | PID with the project's window title | Editor is fine — **true but irrelevant** |
+| `Get-NetTCPConnection … 7800` | `0.0.0.0:7800` bound, owned by that PID | Pipeline is fine — **wrong** |
+| `unity pipeline list --json` | `isRunning: true`, `port: 7801`, `isReachable: false` | the port moved |
+| `GET http://127.0.0.1:7800/api/editor_status` | connection failure, **not `401`** | the 7800 listener is dead |
+| the Editor's registered menu items | no `Pipeline/` entry among 443 | the editor assembly is gone |
+
+**`401` is the health signal; "bound" is not.** The Pipeline API is token-gated, so a live
+server answers an unauthenticated request with `401 Unauthorized` — see
+[the HTTP API is authenticated](#unity-official-the-tool-surface-once-pipeline-is-live). A
+socket that refuses the connection outright is a **stale listener** left behind by a previous
+Pipeline instance: the port is bound and there is no server behind it. Every "is the port
+open" check — `Test-NetConnection`, a bare `Get-NetTCPConnection` — will call that healthy.
+
+**The decisive check is the menu list**, because it is the only one that speaks to the layer
+that matters: whether Pipeline's editor assembly is loaded at all. If `Pipeline/` is absent
+from the Editor's menu items, nothing is going to bind whatever the ports say. It also means
+no arm can restart it from outside — `execute_menu_item "Pipeline/Start Server"` fails
+because the menu item does not exist. **The recovery is an Editor restart**, the same as the
+[sequencing gotcha](#sequencing-gotcha-cost-us-two-restarts), for a different cause.
+
+Do not plan around Pipeline surviving a long session; observed after roughly eight hours of
+continuous use on Editor `6000.5.5f1`. Root cause `[unverified]` — the manifest was correct
+and `Library/PackageCache` still held the package throughout.
+
 ---
 
 ## Authoring, assets and animation
@@ -591,6 +633,127 @@ spawn points apparently floating — which reads as upstream damage and is not.
 
 **Back up the damaged copy and surface it before restoring.** A wiped asset may be someone's
 in-progress re-optimisation rather than corruption.
+
+### A fresh clone opens an empty scene, and it looks exactly like broken LFS
+
+**`[reproduced]`** Unity records *which* scene you had open in `UserSettings/`, which is
+gitignored — correctly, it is per-person state. So a fresh clone, or a first launch on a new
+machine, opens an **untitled empty scene** holding only `Main Camera` and `Directional
+Light`. `list_open_scenes` reports `path: ""` and two roots. Nothing is missing; the project
+has no record of your preference yet, and a collaborator sees a populated scene because he
+opened one.
+
+The trap is that this presents identically to an LFS smudge that never ran, which is a real
+failure with a real fix. **The discriminator is a pointer grep over `Assets/`, and it costs
+one call:**
+
+```bash
+rg -l '^version https://git-lfs\.github\.com' Assets/
+```
+
+Any hit means content was never fetched — `git lfs pull`. *No* hits means every binary is
+materialised, and an empty-looking project is editor state rather than missing assets: open a
+scene and it is over. Confirmed against 474 LFS-tracked files, zero pointers.
+
+This answers a different question from
+[telling a gutted asset from an unsmudged LFS pointer](#telling-a-gutted-asset-from-an-unsmudged-lfs-pointer):
+that one is a byte-size test for a file you already suspect; this one is for a project that
+looks empty and gives you no file to suspect.
+
+Finding the scene to open costs one more read — arm B's `get_build_settings` lists the
+registered scenes, and the first is the entry point.
+
+### Unity's built-in `Plane` is a zero-thickness, single-sided collider
+
+**`[reproduced]`** The `Plane` primitive carries a `MeshCollider` with `convex: false` over
+Unity's default plane mesh — bounds `10 × 2.2e-16 × 10`. Two consequences that appear only
+under physics queries. The inspector shows neither, and neither errors.
+
+**1. It does not exist from below.** A non-convex `MeshCollider` is backface-free, so a ray
+cast upward from underneath the floor misses. Not "hits the far side" — misses. The instant a
+camera passes fractionally under such a floor, the floor stops existing for physics *and*
+visually, and the whole level vanishes into skybox. A wall failing the same way at least
+leaves you looking at geometry.
+
+**2. `SphereCast` returns confident wrong distances within one radius of the surface.**
+Casting downward-and-back from a sweep of origin heights, radius `0.4`, layer mask `1`:
+
+| origin `y` | `SphereCast` | `Raycast` | |
+|---|---|---|---|
+| 0 | HIT @2.91 | HIT @3.37 | both implausible |
+| 0.2 | HIT @3.11 | HIT @0.23 | the ray matches the geometry, the sphere does not |
+| 0.39 | HIT @3.30 | HIT @0.45 | sphere's underside is already through the plane |
+| **0.41** | HIT @0.01 | HIT @0.47 | correct — an immediate hit |
+| 1.0 | HIT @0.67 | HIT @1.12 | correct |
+| 1.5 | HIT @1.21 | HIT @1.65 | correct |
+
+The break is exactly at the cast radius. Below `y = 0.4` the sphere already intersects the
+zero-thickness plane at the cast origin, and Unity returns a plausible distance instead of an
+immediate hit or a miss — so a caster sitting on the floor is told there are three metres of
+clear space below it. `[the degenerate-overlap explanation is inferred, not confirmed]`
+
+Anything that spherecasts from within its own radius of a plane floor inherits this: camera
+deoccluders, ground checks, crouch probes. **Cross-check with a `Raycast`** — it stayed
+correct at every height. This is [P2](#p2--the-confident-wrong-answer) outside the `unity`
+CLI: the API does not error, it answers.
+
+Corollary for test scenes: a sandbox floored with Unity's `Plane` is not representative of a
+game floored with terrain or any mesh that has thickness. A camera bug that only reproduces
+in the test scene may be the floor, not the camera.
+
+## Instruments
+
+Two ways of getting evidence that no tool exposes directly. Both are read-only, both settled
+a question this record had previously been guessing at, and neither is obvious from any tool
+list — which is why they are written down as method rather than as findings.
+
+### `Library/PackageCache/<pkg>@<hash>/` is the installed source
+
+Every Unity package is unpacked into `Library/PackageCache/<name>@<hash>/` with its C# intact.
+That directory is the **exact version you are running**, pinned by the hash — not the tip of a
+GitHub repo that may have moved, and no clone required. `Glob` and `Grep` reach it directly.
+
+It is the fastest way to settle "is this the tool's bug or my call?", and the answer is
+routinely not what black-box observation suggested. The `component_properties` finding was
+recorded as *"`create` silently drops the property"* on black-box evidence; the source showed
+`GameObjectCreate.cs:239-258` **does** implement per-component properties, through a nested
+shape that the Python layer's schema rejects before it reaches Unity — a different bug, in a
+different layer, with a different fix. See
+[scorecard T-001](docs/tooling-scorecard.md#t-001--build-the-same-gameobject-hierarchy-through-each-arm).
+
+Two cautions. `Library/` is gitignored, so a path into it is not a citation anyone else can
+follow — quote the file, line and version. And it is *installed* source, so it goes stale
+silently the moment the package updates; stamp the hash you read.
+
+### Read-only C# probes, returning a table
+
+Neither MCP arm exposes raycasts, bounds, or any physics query. The introspection tools read
+serialized fields, and a serialized field cannot tell you what a cast returns — so a whole
+class of geometry question has no route through the tool surface at all, which is what pushes
+these questions toward `eval` / `execute_code`.
+
+The shape that works is a snippet that **mutates nothing**, sweeps the one variable in
+question, and returns a string:
+
+```csharp
+var sb = new System.Text.StringBuilder();
+foreach (var h in new[] { 0f, 0.2f, 0.39f, 0.41f, 1.0f, 1.5f })
+{
+    // ... query at h ...
+    sb.AppendLine("origin y=" + h + "  SphereCast=" + a + "  Raycast=" + b);
+}
+return sb.ToString();
+```
+
+The sweep is what makes it an instrument rather than an anecdote: a single query at one height
+would have read as a plausible number, and the table is what exposed the discontinuity at the
+radius. Including a control in the same run — the `Raycast` column — is what made "the sphere
+is wrong" a claim rather than a suspicion.
+
+`eval` / `eval_file` (arm B) and `execute_code` (arm C) are in the always-ask permission tier
+and should stay there, so this is a deliberate call each time. But the read-only probe is a
+genuinely different risk from an authoring call through the same tool, and the output table
+drops straight into a bug report as evidence.
 
 ## Git / UnityYAMLMerge
 
@@ -754,6 +917,49 @@ See issue #1 for the full write-up. Key findings:
 ## Log
 
 Newest first.
+
+### 2026-08-05 (evening) — six findings mined from an 8-hour session, and an instruments section
+
+Widening coverage the way the previous entry concluded it had to be widened: from a session
+transcript, at [T3](docs/tooling-experiment.md#evidence-tiers), for work that was not about
+this record. The source is a 2026-07-28 session, 8h14m and 393 tool calls, doing ordinary
+work — standing up a clone, running a trial, chasing a camera bug. It was mined with a script;
+at 4.9 MB it cannot be read.
+
+**Pipeline stopped serving inside a live Editor session**, having worked for hours, and every
+port-level check said it was fine. The two lessons generalise past this bug: `401` is the
+Pipeline health signal, because a *bound* port can be a stale listener with nothing behind it;
+and the check that actually settles it is whether `Pipeline/` appears in the Editor's menu
+items, which speaks to the layer that matters. Recorded as
+[Pipeline can drop out](#pipeline-can-drop-out-of-a-live-editor-session) and as a fifth
+instance of [P4](#p4--the-green-light-that-proves-only-the-first-of-several-states).
+
+**A fresh clone opens an untitled scene, which reads as broken LFS.** Both produce a project
+that looks empty; one is normal and one needs `git lfs pull`. One pointer grep over `Assets/`
+separates them. Recorded in
+[Authoring](#a-fresh-clone-opens-an-empty-scene-and-it-looks-exactly-like-broken-lfs).
+
+**Unity's built-in `Plane` is a zero-thickness, single-sided collider**, and `SphereCast`
+returns confident wrong distances within one cast radius of it — three metres of clear space
+that is not there, while a `Raycast` from the same origin stays correct. The record's
+[P2](#p2--the-confident-wrong-answer) had only ever been written as a `unity`-CLI quirk; this
+is the same shape in the physics API, which is what the pattern layer exists to make cheap.
+
+**Two instruments, written up as method rather than as findings.**
+`Library/PackageCache/<pkg>@<hash>/` holds the exact installed source, version-pinned and
+grep-able without a clone; reading it turned a black-box finding
+(*"`create` drops the property"*) into a different and more accurate one (*the C# implements
+it; the Python schema makes the working shape unreachable*). And a read-only C# probe that
+sweeps one variable and returns a table is the only route to physics and geometry questions
+the tool surface does not expose — the sweep, with a control column, is what makes it evidence.
+Both are in a new [Instruments](#instruments) section.
+
+**Redundancy paid in the other direction.** The scorecard recorded B being used to stand C up;
+here C carried the session after B dropped out. Verdict and the matrix row are in the
+[scorecard](docs/tooling-scorecard.md#capability-matrix); the anti-capability it exposed —
+arm C's `manage_scene` refusing on a dirty scene with no discard action, so the only way past
+is `execute_code` — is in the
+[anti-capabilities table](docs/tooling-scorecard.md#anti-capabilities).
 
 ### 2026-08-05 (later) — a pattern layer, a corrected health check, and a retrieval measurement
 
