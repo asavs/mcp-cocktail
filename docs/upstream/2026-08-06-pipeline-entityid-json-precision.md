@@ -1,4 +1,4 @@
-## `instanceId` returns the same value for distinct GameObjects — precision is lost before the JSON is written
+## `instanceId` is emitted as a bare JSON number above 2^53, so clients that parse JSON numbers as doubles silently merge distinct objects
 
 ### Environment
 
@@ -9,11 +9,33 @@
 
 ### Summary
 
-Tool responses carry an object identifier in a field named `instanceId`. On Editor 6000.4+ that value is `UnityEngine.Object.GetEntityId()` — a ulong-backed `EntityId`, not the `int`-sized `GetInstanceID()` — and observed values are around 5.68×10¹⁷.
+Tool responses carry an object identifier in a field named `instanceId`. On Editor 6000.4+ this is `UnityEngine.Object.GetEntityId()`, a `ulong`-backed `EntityId`, and live values are around 5.68×10¹⁷.
 
-**Distinct GameObjects come back with identical `instanceId` values, in the raw response text.** The objects are genuinely distinct: their `globalId` values differ, and the scene contains two separate objects afterwards. Only the `instanceId` collides.
+It is emitted as a **bare, unquoted JSON number**. JSON numbers are parsed as IEEE-754 doubles by a large share of clients — every JavaScript one, by specification. A double carries 53 bits of integer precision, and in `[2^58, 2^59)` the representable values are **64 apart**. Newly created objects receive ids only a few apart, so distinct objects routinely collapse to the same value in the client.
 
-This is not a client-side parsing artifact. The identical digits are present in the bytes the CLI prints, before any client parses them into a number.
+The identifier is correct in the Editor and correct on the wire. It is destroyed on arrival.
+
+### Evidence
+
+Measured in-process, two GameObjects created back to back:
+
+```
+A = 568105589213729136
+B = 568105589213729132     // four apart, EntityId.Equals -> False
+```
+
+Read back through the CLI, the same kind of pair reports:
+
+```
+Probe-1   globalId GlobalObjectId_V1-2-3efd2655…-166994847-0    instanceId 568105589213729300
+Probe-2   globalId GlobalObjectId_V1-2-3efd2655…-2000673772-0   instanceId 568105589213729300
+```
+
+Distinct `globalId`, identical `instanceId`. `create_gameobjects --count 2` behaves the same way.
+
+Four apart, against a 64-wide gap between adjacent doubles at that magnitude, is exactly the predicted collapse.
+
+The serialization path itself is not at fault, which is worth stating so the fix is aimed correctly. `ObjectIdConverter.WriteJson` calls `writer.WriteValue(ulong)`, which in Newtonsoft.Json 13.0.2 routes to the integer writer, not the floating-point one. The two paths are separate methods, and the double path always emits a decimal point or an exponent — a bare 18-digit run is the signature of the exact-integer path. So the bytes leaving the server carry the true value.
 
 ### Steps to reproduce
 
@@ -24,43 +46,18 @@ unity command create_gameobject --name Probe-1 --json
 unity command create_gameobject --name Probe-2 --json
 ```
 
-Observed, on two consecutive runs:
+Compare the two `instanceId` values. Expected: two distinct identifiers for two distinct objects. Actual: identical, while `globalId` differs.
 
-```
-Probe-1   globalId GlobalObjectId_V1-2-3efd2655…-166994847-0    instanceId 568105589213729300
-Probe-2   globalId GlobalObjectId_V1-2-3efd2655…-2000673772-0   instanceId 568105589213729300
-```
-
-`create_gameobjects --count 2` behaves the same way — both returned `568105589213729340`.
-
-Expected: two distinct objects, two distinct identifiers. Actual: distinct `globalId`, identical `instanceId`.
-
-### Why this appears to happen
-
-Stated as inference, not observation — the mechanism is consistent with the output but has not been confirmed against the serializer's source.
-
-A `double` carries 53 bits of integer precision. Above 2^53 the gap between adjacent representable values is `2^(e−52)` for the exponent bracketing the value. Values around 5.68×10¹⁷ fall in `[2^58, 2^59)`, where that gap is **64**. Any two identifiers less than 64 apart become the same value once passed through a `double`.
-
-Two details point at that happening inside the server rather than in a client:
-
-1. The collision is present in the emitted text, so it precedes serialization to JSON.
-2. The emitted integers do not look like arbitrary 64-bit values. `568105589213729340` is not itself exactly representable as a `double` — the nearest is `568105589213729344` — which is what a `double` formatted back to 17 significant decimal digits looks like, rather than what an exact `ulong` printed as an integer looks like.
-
-Together those suggest the identifier is being widened or passed through a floating-point type somewhere between `GetEntityId()` and the response, and that the JSON encoding is faithfully reproducing an already-damaged value.
-
-### Why it presents as intermittent
-
-Identifiers that happen to be allocated 64 or more apart survive and look completely normal; ones allocated closer together merge. Nothing about timing, call ordering, or batch-versus-single affects it — the determining factor is how far apart the underlying values happen to fall. That makes it easy to mistake for a nondeterministic allocation bug in the engine, which is where the investigation behind this report first went.
+A client whose JSON parser keeps integers exact — Python's `json`, for instance — will **not** reproduce this, because the loss happens at the client's parse rather than in Pipeline. That is likely why the issue has not surfaced widely: it depends on the consumer's JSON stack, and the two most common consumers of this API are JavaScript.
 
 ### Suggested fix
 
-Two parts, and the first matters more:
+**Emit `instanceId` as a quoted JSON string.** This is the standard remedy for 64-bit identifiers that must survive arbitrary JSON tooling — Twitter/X's `id_str` alongside a numeric `id` is the familiar precedent, adopted for exactly this failure. Since the value is already intact at serialization time, quoting is sufficient; no change to how the id is carried internally is needed.
 
-1. **Carry the identifier as an integer end to end.** If it is currently widened to `double`, or serialized through a path that treats numeric values as `double`, the precision is gone before encoding and no change to the wire format recovers it.
-2. **Consider emitting it as a quoted string** once it is intact. Values above 2^53 in a bare JSON number are fragile regardless, because a great many clients parse JSON numbers into doubles; quoting is the usual remedy for 64-bit ids (Twitter/X's `id_str` being the familiar precedent). Worth noting this is a breaking wire-format change for clients currently reading it as a number, so it likely wants a deliberate versioning decision rather than a patch-level one.
+Worth flagging that this is a breaking wire-format change for any client currently reading `instanceId` as a number, so it likely wants a deliberate versioning decision rather than a patch-level one. Emitting a companion string field and deprecating the numeric one is the lower-friction path if that matters.
 
-A useful check while testing either: compare the identifiers as **text**, not as parsed numbers. A client whose JSON library keeps integers exact — Python's `json`, for instance — will still show the collision here, because the loss is upstream of the client; but comparing as text removes any doubt about where it happened.
+For comparison, another MCP server for Unity exposes an object identifier as a quoted string and does not exhibit this behaviour with its consumers.
 
 ### Naming note
 
-Separately from the encoding: the field is named `instanceId` but no longer carries what `GetInstanceID()` returns. The name predates the `EntityId` migration and invites the assumption that the value is a small ordinary int, which is part of what made the symptom read as an engine bug rather than a serialization one. Renaming it, or documenting what it now contains, would help independently of the precision issue.
+Separately from the encoding: the field is named `instanceId` but no longer carries what `GetInstanceID()` returns — the name predates the `EntityId` migration. It invites the assumption that the value is a small ordinary int, which is precisely the assumption that makes a bare JSON number look safe. Renaming it, or documenting what it now holds, would reduce the chance of the same assumption being made downstream.

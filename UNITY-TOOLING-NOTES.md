@@ -1204,11 +1204,37 @@ error has already been made twice on this one finding.
 `docs/upstream/2026-08-06-pipeline-entityid-json-precision.md`, written to rest only on the
 directly observed collision and to mark the mechanism as inference.
 
-**The pattern, third time on this single finding.** Engine race → client-parse precision loss →
-server-side precision loss. Each account was reached by explaining the evidence in hand rather
-than by producing the one observation that would separate the candidates, and each was more
-confident than its evidence. The separating observation here cost two commands and existed the
-whole time.
+**`[settled — fifth and final account, each layer now measured rather than argued]`**
+
+| Layer | State | How it is known |
+|---|---|---|
+| Engine `GetEntityId()` | **distinct** — `568105589213729136` and `…132`, four apart | measured in-process via `eval`, `Equals` → `False` |
+| Pipeline serialization | **exact** | `ObjectIdConverter.WriteJson` calls `WriteValue(ulong)`, which in Newtonsoft 13.0.2 routes to the integer writer; the double path is a separate method that always emits a `.` or exponent |
+| Client parse | **collapsed** | two objects, distinct `globalId`, identical `instanceId` in CLI output |
+
+The engine is fine and the server is fine. **The value is destroyed on arrival**, by any client
+that parses JSON numbers into IEEE-754 doubles — which is every JavaScript client, by
+specification. At `[2^58, 2^59)` adjacent doubles are **64** apart and fresh ids land about four
+apart, so collapse is the normal case rather than the exception. Both consumers here are
+JavaScript, which is why both arms showed it. A client with exact integer parsing — Python's
+`json` — would not.
+
+**Fix: quote the field.** Sufficient, because the value is intact when it is written.
+
+**Five accounts of one finding, and the diagnostic lesson is the finding.** Engine race →
+client-parse loss → server-side loss → genuine engine collision → client-parse loss, measured.
+Four of the five were reached by *explaining the evidence in hand*; only the last was reached by
+*producing the observation that separates the candidates*. Each intermediate account was
+internally coherent, cited real evidence, and was more confident than it had earned. Two were
+supported by source reads that were themselves correct — the code really was clean at the layer
+that was read.
+
+The separating observations cost, in total: one `eval` to read the ids in-process, and one IL
+disassembly. Both were available from the start. **When several stories fit, stop arguing about
+which fits best and go get the measurement that only one of them survives** — and note that the
+digit-shape evidence which felt most convincing (`…340` looking like a rounded double) was the
+piece that pointed most confidently in the wrong direction, because a bare integer run is
+exactly what the *non*-floating path emits.
 
 ### 2026-08-06 (later) — T-003, and four CLI traps found by running it
 
