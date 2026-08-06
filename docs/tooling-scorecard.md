@@ -62,7 +62,7 @@ the picture, and cite the trial.
 | Install / uninstall editors and modules | **A** | B, C — impossible | High | Structural: MCPs need a live Editor |
 | Open / close projects, license, auth | **A** | B, C — impossible | High | Structural |
 | Headless / CI / no Editor running | **A** | B, C — impossible | High | Structural |
-| Live scene-graph inspection | **B** or **C** | A — impossible | High | Structural: CLI has no scene access |
+| Live scene-graph inspection | **A**, **B**, or **C** | — | High | Re-verified 2026-08-06: `unity command get_scene_hierarchy` returned the live hierarchy from a shell, exit 0. The former "A — impossible / structural" was **wrong, not stale** |
 | Reading Editor console / compile errors | **B** | — | Medium | T-000; `get_console_logs` returned structured data immediately |
 | Invoking Editor menu items | **B** | — | Medium | T-000; `menu` executed and listed all 873 items |
 | Editor lifecycle (quit, play mode) | **B** | — | Low | T-000; `File/Exit` worked but errored on response as the server died |
@@ -72,27 +72,57 @@ the picture, and cite the trial.
 | Script creation + attach + recompile | ? | — | None | **Untested** |
 | Builds and test runs | ? | — | None | **Untested** — A and B both offer it |
 | Asset import / settings changes | ? | — | None | **Untested** |
-| Multi-client environments | **C** | — | Medium | 22 configurators vs ~16; structural |
+| Multi-client environments | **C** | — | Medium | 22 configurators vs an uncounted B. Re-verified 2026-08-06: still 22 on `v10.1.2`, still no Grok. **Not structural** — a file count is a version fact |
 | Physics / geometry queries (raycasts, bounds) | **B** or **C**, via `eval` / `execute_code` | every introspection tool — the capability does not exist | Low | T3, 2026-07-28; serialized fields cannot answer what a cast returns — [Instruments](../UNITY-TOOLING-NOTES.md#read-only-c-probes-returning-a-table) |
-| Carrying on when the other MCP is down | **the other MCP** | A — shares B's failure domain | Low | T3; T-000 ran B→C, 2026-07-28 ran C→B |
+| Carrying on when the other MCP is down | **the other MCP** | A — shares B's failure domain | Low | One real instance: 2026-07-28, Pipeline died mid-session and C carried. T-000's "B→C" was B *configuring* C at setup, not failover — the two are not symmetric |
 
-**Coverage: 12 of 16 rows filled.** Five of those are **structural** — true by architecture,
-not worth a trial — so seven rest on evidence, and the four `?`s are the interesting ones.
-`[count corrected 2026-08-05: the previous prose said six structural, against five in the
-table.]`
+**Coverage: 12 of 16 rows filled.** **Three** are **structural** — true by architecture, not
+worth a trial — so nine rest on evidence, and the four `?`s are the interesting ones.
+`[count corrected 2026-08-05: prose said six against five in the table. Corrected again
+2026-08-06: the re-audit below demoted two of those five.]`
 
-None of the filled rows cites evidence newer than the installed versions, which is expected —
-evidence is produced by running what is installed. The number that matters is the other one:
-**three filled rows rest partly on arm C at `v10.0.0`, three releases behind the current
-`v10.1.2`** (GameObject authoring, physics/geometry queries, carrying on when the other MCP
-is down). Re-confirm those before treating them as current.
+**One row was wrong, not stale.** "Live scene-graph inspection — A impossible, CLI has no
+scene access" was carried at **High confidence, structural** — the strongest label in the
+table — and is false. `unity list` enumerates 141 Pipeline tools from a shell and
+`unity command get_scene_hierarchy` returns the live hierarchy. The contradiction was sitting
+eight lines above the row it refutes: the A=B note already said `unity command` uses the same
+`com.unity.pipeline` HTTP API that B exposes. Nobody ran the command.
+
+Two consequences worth keeping. First, **the premise excluded arm A from T-001** (see that
+trial's own arm table), so a three-way comparison was run as two-way and its verdict covers
+less than it appears to. Second, **the A=B correction never swept backwards**: rows written
+before it (all of 1–9 and multi-client) were never re-checked against it, and the one row that
+gets it right was written the same evening it landed. A correction that only applies going
+forward is a correction that has not been applied.
+
+**Arm A is two mechanisms under one letter**, which is what let the error hide. `unity build`
+/ `unity test` / `unity install` spawn a fresh batch-mode Editor or talk to the Hub, touching
+no Pipeline at all — that is why "headless / CI" survives the A=B correction honestly.
+`unity list` / `unity command` are a front-end over the *same* Pipeline server as B. The
+matrix writes both as "A". Rows justified on one face do not transfer to the other, and until
+this table distinguishes them, the same class of error can recur.
+
+**Staleness, re-audited 2026-08-06.** **Four** filled rows — not three — rest partly on arm C
+at `v10.0.0`, three releases behind `v10.1.2`: GameObject authoring, physics/geometry queries,
+carrying on when the other MCP is down, and **multi-client environments**. The last was
+omitted from the previous count because its "structural" label exempted it; a count of files
+shipped in one release is a version fact and expires like any other.
+
+The earlier observation that "no filled row cites evidence newer than the installed versions"
+is tautological — evidence is produced by running what is installed — and must not be read as
+reassurance about the remaining rows.
 
 ### Standing observations
 
 Short version, with the detail living elsewhere — this file is for verdicts,
 [UNITY-TOOLING-NOTES.md](../UNITY-TOOLING-NOTES.md) is for observations.
 
-- **A fails quietly** — returns confident wrong answers rather than errors.
+- **A fails quietly — but not always, and the blanket phrasing was overstated.**
+  `[re-verified 2026-08-06]` `unity list` returns exit **6** with a three-item diagnostic
+  when no Pipeline is reachable, and `unity editors running --json` correctly reported
+  `count: 0` with three `unity.exe mcp` bridge subprocesses alive — it was right to not
+  count them as Editors. The failure mode is real but narrower than "A fails quietly"
+  suggests; treat it as a hazard to check for, not a property to assume.
   [Detail](unity-cli.md#scripting-the-cli).
 - **B's mutating calls echo the resulting state; C's don't.** Confirmation is
   free on B and a deliberate extra read on C, whose `set_property` returns only
@@ -254,7 +284,9 @@ Newest first. Template at the bottom.
 
 **Date** 2026-07-28 · **Category** authoring · **Mutating** yes ·
 **Versions** CLI `1.0.0-beta.3`, Editor `6000.5.5f1`, Pipeline `0.4.0-exp.1`,
-MCP for Unity `v10.0.0` (server `3.4.5`)
+MCP for Unity `v10.0.0` `[corrected 2026-08-06: this line read "server 3.4.5". 3.4.5 is
+FastMCP's version, not the server's — the Unity package pulls the Python server via uvx, so
+the two version-stamp independently. The resolved server here was 10.1.0.]`
 
 Run blind and serial, one subagent per arm on the same model, each writing its
 own account before any comparison: [arm-b.md](trials/T-001/arm-b.md) ·
