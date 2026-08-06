@@ -68,6 +68,8 @@ the picture, and cite the trial.
 | Editor lifecycle (quit, play mode) | **B** | — | Low | T-000; `File/Exit` worked but errored on response as the server died |
 | Scripted / repeatable setup | **A** | — | Medium | T-000; every CLI step was reproducible, GUI steps were not |
 | GameObject authoring | **C**, then **B** | — | Medium-High | T-005, the first run with all three arms actually executing: **failed calls C 0, B 1, A 3**. C accepts the public `size`; A and B require the serialized `m_Size`. C echoes state on 2 of 4 mutating calls, B 1 of 5, A 0 of 6. Prefer **B** where tools must be allowlisted read-only (44/140 vs 9/47) or where loud, specific errors matter more than call count. A authors correctly *with* a verify-every-write discipline (T-003) |
+| Setting a **computed** property (non-trivial setter) | **C** | A, B — they write the backing field, not the property | Medium-High | T-006, 2026-08-06. C resolves the literal name by reflection on the public C# API first, so the **real setter runs**. Decisive case: `Transform.position` on a child of a parent at `(10,5,3)` → world `(50,60,70)`, local `(40,55,67)` = `world − parent`, exactly right. A rejected it outright |
+| Setting **private serialized** state (no public setter) | **A** or **B** | C — its fallback supports only some `SerializedPropertyType`s | Medium | T-006. C's tier-2 fallback matches literal serialized names but failed `m_Size` with `Unsupported SerializedPropertyType: Vector3`; A wrote it fine. The serialized layer reaches state the public API does not expose |
 | Prefab authoring | ? | — | None | **Untested** |
 | Script creation + attach + recompile | ? | — | None | **Untested** |
 | Builds and test runs | ? | — | None | **Untested** — A and B both offer it |
@@ -76,10 +78,21 @@ the picture, and cite the trial.
 | Physics / geometry queries (raycasts, bounds) | **B** or **C**, via `eval` / `execute_code` | every introspection tool — the capability does not exist | Low | T3, 2026-07-28; serialized fields cannot answer what a cast returns — [Instruments](../UNITY-TOOLING-NOTES.md#read-only-c-probes-returning-a-table) |
 | Carrying on when the other MCP is down | **the other MCP** | A — shares B's failure domain | Low | One real instance: 2026-07-28, Pipeline died mid-session and C carried. T-000's "B→C" was B *configuring* C at setup, not failover — the two are not symmetric |
 
-**Coverage: 12 of 16 rows filled.** **Three** are **structural** — true by architecture, not
-worth a trial — so nine rest on evidence, and the four `?`s are the interesting ones.
-`[count corrected 2026-08-05: prose said six against five in the table. Corrected again
-2026-08-06: the re-audit below demoted two of those five.]`
+**Coverage: 14 of 18 rows filled.** **Three** are **structural** — true by architecture, not
+worth a trial — so eleven rest on evidence, and the four `?`s are the interesting ones.
+`[count corrected 2026-08-05: prose said six structural against five in the table. Corrected
+again 2026-08-06: the re-audit below demoted two of those five. Two rows added 2026-08-06 from
+T-006.]`
+
+**The two new rows are the first split the matrix has made on capability rather than friction.**
+Every previous verdict came down to call count, error quality or allowlistability — differences
+of ergonomics between arms that could all, eventually, do the job. Property mutation is not like
+that: **the arms operate on different layers.** C resolves a name by reflection against the live
+component's public API and runs the real setter; A and B expose only `SerializedProperty` and
+write the backing field. Each reaches state the other cannot. A computed property written
+through the serialized layer is left inconsistent with what it derives from; private serialized
+state has no public setter to reflect on at all. Coverage rose here by finding a question the
+table had never asked, which is the same way it rose in Phase 2.
 
 **One row was wrong, not stale.** "Live scene-graph inspection — A impossible, CLI has no
 scene access" was carried at **High confidence, structural** — the strongest label in the

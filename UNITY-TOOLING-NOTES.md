@@ -928,6 +928,51 @@ See issue #1 for the full write-up. Key findings:
 
 Newest first.
 
+### 2026-08-06 (last) — the arms mutate properties through different layers, and it matters
+
+**Arm C does not translate property names. It resolves the literal string against two backends
+in order**, and this is the mechanism behind what looked like a naming convenience:
+
+1. **Reflection on the live component's public C# API.** If a public property or field with the
+   caller's exact name exists, the **real .NET setter runs**.
+2. **Fallback: `SerializedObject.FindProperty(literalName)`** — the same string, no case change,
+   no `m_` prefixing. This path supports only a subset of `SerializedPropertyType`s.
+
+**Arms A and B expose only the second layer.** That is the whole difference. `size` succeeds on
+C because `BoxCollider.size` *is* the public property name and tier 1 catches it; A and B reject
+it because at the serialized layer the field is `m_Size`. Neither arm is being clever.
+
+Proof that tier 2 matches literals only and is never derived: handing C the serialized name
+`m_Size` **fails** with `Unsupported SerializedPropertyType: Vector3 at 'm_Size'` — it found the
+field by exact string and could not write a Vector3 through the fallback. Same for
+`m_LocalPosition` on `Transform`. Read-back confirmed the value unchanged in both cases.
+
+**The decisive case was `Transform.position`, and it is a real capability difference rather than
+a syntax one.** `position` is world space; the backing field `m_LocalPosition` is local. A
+name-mapping implementation would write the world value straight into the local field and
+silently displace the object by the parent offset. What actually happened, on a child of a
+parent at `(10, 5, 3)`: setting `position` to `(50, 60, 70)` produced world `(50, 60, 70)` and
+local `(40, 55, 67)` — exactly `world − parent`. **C invoked the real `Transform.position`
+setter**, which computes the local value itself. Arm A rejected the write outright and left the
+transform untouched.
+
+**So the two layers have genuinely different reach, and neither dominates:**
+
+- **Public-API layer (C).** Setters run, so computed properties are correct, conversions happen,
+  and validation and side effects fire. It cannot reach state with no public setter.
+- **Serialized layer (A, B).** Reaches private serialized state directly and deterministically,
+  including fields no public API exposes — and for that reason bypasses setters entirely, so a
+  derived property written this way can be left inconsistent with the state it derives from.
+
+Reach for C when the property is computed or has a non-trivial setter, and for A or B when the
+field is private serialized state. This is the first measured case where the A/B-versus-C choice
+turns on capability rather than friction.
+
+**Both arms were honest throughout this.** Every `success: true` verified on read-back across
+six property cases on each arm, and every failure reported `success: false` with a specific
+error. No silent no-ops on either side — worth recording, because the CLI's silent argument drop
+is a different failure class and this one does not exhibit it.
+
 ### 2026-08-06 (last) — `Bridge.StartAsync()` from `eval` deadlocks the Editor permanently
 
 **`[feedback]` `[reproduced on v10.0.0]` Calling CoplayDev's
