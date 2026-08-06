@@ -215,11 +215,18 @@ def cmd_tools(args):
             print(f"{n:<7} {name:<32} {' '.join(text.split())[:130]}")
 
 
+NEEDS_ARG = {"stats": "<file|uuid>", "grep": "<pattern> [file|uuid]", "tools": "<file|uuid>"}
+
+
 def main() -> None:
     cmds = {"sweep": cmd_sweep, "stats": cmd_stats, "grep": cmd_grep, "tools": cmd_tools}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         sys.exit(__doc__)
-    cmds[sys.argv[1]](sys.argv[2:])
+    cmd, args = sys.argv[1], sys.argv[2:]
+    if cmd in NEEDS_ARG and not args:
+        sys.exit(f"{cmd} needs an argument: {cmd} {NEEDS_ARG[cmd]}\n"
+                 f"Run `sweep` first to list sessions.")
+    cmds[cmd](args)
 
 
 if __name__ == "__main__":

@@ -68,8 +68,8 @@ the picture, and cite the trial.
 | Editor lifecycle (quit, play mode) | **B** | — | Low | T-000; `File/Exit` worked but errored on response as the server died |
 | Scripted / repeatable setup | **A** | — | Medium | T-000; every CLI step was reproducible, GUI steps were not |
 | GameObject authoring | **C**, then **B** | — | Medium-High | T-005, the first run with all three arms actually executing: **failed calls C 0, B 1, A 3**. C accepts the public `size`; A and B require the serialized `m_Size`. C echoes state on 2 of 4 mutating calls, B 1 of 5, A 0 of 6. Prefer **B** where tools must be allowlisted read-only (44/140 vs 9/47) or where loud, specific errors matter more than call count. A authors correctly *with* a verify-every-write discipline (T-003) |
-| Setting a **computed** property (non-trivial setter) | **C** | A, B — they write the backing field, not the property | Medium-High | T-006, 2026-08-06. C resolves the literal name by reflection on the public C# API first, so the **real setter runs**. Decisive case: `Transform.position` on a child of a parent at `(10,5,3)` → world `(50,60,70)`, local `(40,55,67)` = `world − parent`, exactly right. A rejected it outright |
-| Setting **private serialized** state (no public setter) | **A** or **B** | C — its fallback supports only some `SerializedPropertyType`s | Medium | T-006. C's tier-2 fallback matches literal serialized names but failed `m_Size` with `Unsupported SerializedPropertyType: Vector3`; A wrote it fine. The serialized layer reaches state the public API does not expose |
+| Setting a **computed** property (non-trivial setter) | **C** | A, B — they write the backing field, not the property | Medium-High | T-006 (**probe, not a blind trial** — see its protocol note), 2026-08-06. C resolves the literal name by reflection on the public C# API first, so the **real setter runs**. Decisive case: `Transform.position` on a child of a parent at `(10,5,3)` → world `(50,60,70)`, local `(40,55,67)` = `world − parent`, exactly right. A rejected it outright |
+| Setting **private serialized** state (no public setter) | **A** or **B** | C — its fallback supports only some `SerializedPropertyType`s | Medium | T-006 (probe, not a blind trial). C's tier-2 fallback matches literal serialized names but failed `m_Size` with `Unsupported SerializedPropertyType: Vector3`; A wrote it fine. The serialized layer reaches state the public API does not expose |
 | Prefab authoring | ? | — | None | **Untested** |
 | Script creation + attach + recompile | ? | — | None | **Untested** |
 | Builds and test runs | ? | — | None | **Untested** — A and B both offer it |
@@ -401,6 +401,39 @@ authoring trial is for.
 ## Trials
 
 Newest first. Template at the bottom.
+
+### T-006 — property-name resolution · **single-operator probe, not a blind trial**
+
+**Date** 2026-08-06 · **Category** property mutation · **Mutating** yes ·
+**Versions** CLI `1.0.0-beta.3`, Editor `6000.5.5f1`, Pipeline `0.4.0-exp.1`, CoplayDev `v10.0.0`
+
+**Read the protocol deviation before citing this.** One operator ran both arms and knew each
+result before running the next, against a protocol that requires one blind report per arm. It
+was given a `T-` number in the matrix *before this report existed* — a reviewer caught the
+scorecard citing a trial with nothing behind it, which is exactly the "cite the trial" rule
+this file sets for everyone else. Full detail and the cost of the deviation:
+[probe.md](trials/T-006/probe.md).
+
+The findings survive the deviation because the measurements are mechanical — did the call bind,
+does an independent read-back show the value. Nothing here rests on step counts, friction or
+preference, which are what blinding protects. **Do not draw ergonomic comparisons from it.**
+
+**Arm C does not translate property names.** It resolves the literal string against two
+backends in order: reflection on the live component's public C# API, where an exact match runs
+the **real .NET setter**; then `SerializedObject.FindProperty` on the same literal string. Arms
+A and B expose only the second. `size` works on C because `BoxCollider.size` *is* the public
+property name.
+
+Proof the fallback never derives a name: handing C the serialized `m_Size` **fails** with
+`Unsupported SerializedPropertyType: Vector3 at 'm_Size'` — found by exact string, unwritable
+through that path. Read-back confirmed unchanged.
+
+**`Transform.position` is the decisive case**, because a name-mapper and a reflector predict
+different outcomes. On a child of a parent at `(10,5,3)`, setting `position` to `(50,60,70)`
+gave world `(50,60,70)` and local `(40,55,67)` — exactly `world − parent`. A name-mapper would
+have reported success while displacing the object. Arm A rejected the write outright.
+
+Six property cases per arm, no success/read-back mismatches, every failure specific.
 
 ### T-005 — the same authoring task, and the first one that was actually three-way
 
