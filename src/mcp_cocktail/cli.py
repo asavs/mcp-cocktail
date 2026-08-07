@@ -10,6 +10,7 @@ from pathlib import Path
 
 from mcp_cocktail import __version__
 from mcp_cocktail.config import CocktailConfig, TrapsConfig
+from mcp_cocktail.doctor import run_doctor, print_doctor_report
 from mcp_cocktail.guardrail import run_guardrail, selftest as guardrail_selftest
 from mcp_cocktail.inbox import append_note, show_inbox
 from mcp_cocktail.installer import install_hook, uninstall_hook
@@ -32,7 +33,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         "description": "Multi-arm tooling benchmark workspace",
         "arms": [
             {
-                "id": "arm-cli",
+                "id": "tool-cli",
                 "name": "Primary CLI",
                 "type": "cli",
                 "command": "tool-cli",
@@ -40,7 +41,7 @@ def cmd_init(args: argparse.Namespace) -> int:
                 "health_check": "tool-cli --version"
             },
             {
-                "id": "arm-mcp",
+                "id": "official-mcp",
                 "name": "Official MCP Server",
                 "type": "mcp",
                 "mcp_server": "tool-mcp-server",
@@ -82,7 +83,7 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
-    """1-Command automated setup for any project (preset: unity, default, etc)."""
+    """1-Command automated setup and arm health validation for any project."""
     preset = args.preset or "unity"
     repo_root = Path(__file__).resolve().parents[2]
     example_dir = repo_root / "examples" / preset
@@ -93,9 +94,11 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     src_manifest = example_dir / "cocktail.json"
     src_traps = example_dir / "traps.json"
+    src_tools = example_dir / "tools"
 
     dst_manifest = Path.cwd() / "mcp-cocktail.json"
     dst_traps = Path.cwd() / "traps.json"
+    dst_tools = Path.cwd() / "tools"
 
     if src_manifest.exists():
         shutil.copy(src_manifest, dst_manifest)
@@ -105,6 +108,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
         shutil.copy(src_traps, dst_traps)
         print(f"Copied preset trap rules -> {dst_traps}")
 
+    if src_tools.exists() and not dst_tools.exists():
+        shutil.copytree(src_tools, dst_tools)
+        print(f"Provisioned domain helper tools -> {dst_tools}")
+
     ok, msg = install_hook(
         harness=args.harness,
         global_settings=args.global_settings,
@@ -112,7 +119,20 @@ def cmd_setup(args: argparse.Namespace) -> int:
         custom_traps=str(dst_traps) if dst_traps.exists() else None,
     )
     print(msg)
+
+    # Automatically run doctor to validate arm readiness honestly
+    config = CocktailConfig.load()
+    doc_results = run_doctor(config)
+    print_doctor_report(doc_results, config)
+
     print(f"\n[OK] mcp-cocktail setup complete for '{preset}' domain!")
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    config = CocktailConfig.load()
+    doc_results = run_doctor(config)
+    print_doctor_report(doc_results, config)
     return 0
 
 
@@ -212,7 +232,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     briefs = res["briefs"]
     print(f"Created trial {args.trial_id} (Scene Isolation Strategy: {res['scene_strategy']}) with {len(briefs)} arm brief(s):")
     for arm_id in briefs:
-        print(f"  - docs/trials/{args.trial_id}/brief-arm-{arm_id}.md")
+        print(f"  - docs/trials/{args.trial_id}/brief-{arm_id}.md")
     print(f"Task payload specification generated: {res['tasks_file']}")
     return 0
 
@@ -249,11 +269,13 @@ def main(argv: list[str] | None = None) -> int:
     p_init.add_argument("--name", help="Workspace name")
     p_init.add_argument("--force", action="store_true", help="Overwrite existing manifest")
 
-    p_setup = subparsers.add_parser("setup", help="1-Command automated setup for a target domain (e.g. unity)")
+    p_setup = subparsers.add_parser("setup", help="1-Command automated setup and doctor validation for a target domain (e.g. unity)")
     p_setup.add_argument("--preset", default="unity", help="Domain preset name (default: unity)")
     p_setup.add_argument("--harness", default="auto", help="Target harness (claude, omp, mcp, auto)")
     p_setup.add_argument("--global", dest="global_settings", action="store_true", help="Target global settings")
     p_setup.add_argument("--settings", help="Explicit path to settings.json")
+
+    subparsers.add_parser("doctor", help="Run arm health and diagnostic probes")
 
     p_check = subparsers.add_parser("check", help="Run PreToolUse trap guardrail check")
     p_check.add_argument("--traps", help="Path to traps.json")
@@ -307,6 +329,7 @@ def main(argv: list[str] | None = None) -> int:
     handler = {
         "init": cmd_init,
         "setup": cmd_setup,
+        "doctor": cmd_doctor,
         "check": cmd_check,
         "serve": cmd_serve,
         "proxy": cmd_proxy,
