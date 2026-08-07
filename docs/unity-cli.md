@@ -57,8 +57,9 @@ The editor will not open a project without a license.
 
 ## Install the editor
 
-This project needs **6000.5.5f1** exactly (see
-[../CONTRIBUTING.md](../CONTRIBUTING.md)).
+Install the version your Unity project pins — a mismatch re-imports the whole
+Library on first open and can rewrite asset metadata. Everything below was
+measured against **6000.5.5f1**; substitute your own version in the commands.
 
 ```bash
 unity install 6000.5.5f1 -a x86_64 \

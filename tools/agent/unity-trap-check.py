@@ -12,13 +12,11 @@ Every rule below cites a finding that already exists in the record. This file ad
 claims; it is a retrieval mechanism, not a second copy of the notes. If a rule and the
 record disagree, the record is right and this file is stale.
 
-Wiring (applied in 0da28e2, project-scoped)
--------------------------------------------
-In `.claude/settings.json`. This used to say the hook could not arm until a new session,
-because hooks are captured in a startup snapshot (`setup_hooks_captured`) — read out of
-the 2.1.222 binary, never run. It is wrong: measured twice, a hook added mid-session arms
-without a restart, first injection ~15 minutes into a session that predated the config.
-See docs/trials/M-001-RESULT.md. The symbol is real; the inference from it was not.
+Wiring
+------
+This file lives in the record's repo and is wired into the `.claude/settings.json` of
+whatever Unity project you are working in — the record is not that project, and does not
+want to be checked out inside it. Point the command at an absolute path:
 
     "hooks": {
       "PreToolUse": [
@@ -27,13 +25,21 @@ See docs/trials/M-001-RESULT.md. The symbol is real; the inference from it was n
           "hooks": [
             {
               "type": "command",
-              "command": "python \"$CLAUDE_PROJECT_DIR/tools/agent/unity-trap-check.py\"",
+              "command": "python \"C:/Users/you/Projects/mcp-cocktail/tools/agent/unity-trap-check.py\"",
               "timeout": 10
             }
           ]
         }
       ]
     }
+
+If the record is somewhere else, set `MCP_COCKTAIL_DIR`. Citations are emitted as absolute
+paths, because a bare filename is unopenable from the project the hook actually fires in.
+
+A hook added mid-session arms without a restart. This used to claim the opposite — that
+hooks are captured in a startup snapshot (`setup_hooks_captured`), read out of the 2.1.222
+binary and never run. Measured twice and false; first injection landed ~15 minutes into a
+session that predated the config. See docs/trials/M-001-RESULT.md.
 
 Contract
 --------
@@ -59,8 +65,24 @@ import os
 import re
 import sys
 import time
+from pathlib import Path
 
-NOTES = "UNITY-TOOLING-NOTES.md"
+
+def _record_root() -> Path:
+    """Where the record lives — derived from this file, never from the cwd.
+
+    This hook fires inside whatever project is being worked on, which is almost never
+    this one. A bare `UNITY-TOOLING-NOTES.md` in a message is unopenable from there, so
+    every citation is emitted as an absolute path. `MCP_COCKTAIL_DIR` overrides.
+
+    Deliberately duplicated in note.py rather than shared through an import: a hook that
+    raises on import breaks the tool call it was meant to annotate.
+    """
+    env = os.environ.get("MCP_COCKTAIL_DIR")
+    return Path(env) if env else Path(__file__).resolve().parents[2]
+
+
+NOTES = str(_record_root() / "UNITY-TOOLING-NOTES.md")
 
 # (id, cooldown_s, tool-name regex or None, command regex or None, message)
 # cooldown_s = 0  -> fire on every match (trigger is specific enough to always be relevant)
@@ -203,11 +225,12 @@ RULES: list[tuple[str, int, str | None, str | None, str]] = [
     (
         "hierarchy-no-pagination", 0,
         r"^mcp__unity-editor-mcp__(get_scene_hierarchy|find_gameobjects)$", None,
-        "ANTI-CAPABILITY — this tool has no depth, limit, or pagination parameter. On a "
-        "real scene in this project `get_scene_hierarchy` returned 290,642 characters / "
-        "7,883 lines and blew the client's token limit outright. If the target scene is "
-        "the OldForest one, scope the question another way (`search`, `find_assets`, or a "
-        f"specific path) before calling this. ({NOTES}#log)",
+        "ANTI-CAPABILITY — this tool has no depth, limit, or pagination parameter. On one "
+        "measured production scene `get_scene_hierarchy` returned 290,642 characters / "
+        "7,883 lines and blew the client's token limit outright. Any scene with terrain or "
+        "a large prop count can do this. Scope the question another way — `search`, "
+        f"`find_assets`, or a specific path — before calling it on a scene you have not "
+        f"already measured. ({NOTES}#log)",
     ),
     (
         "component-props-unsupported", 0,
@@ -476,7 +499,8 @@ def selftest() -> int:
         ("mcp__unity-editor-mcp__editor_play", {}, "shared-editor-state"),
         ("Bash", {"command": "unity list"}, "cli-general"),
         ("Bash", {"command": "git status --short"}, None),
-        ("Bash", {"command": "cd /c/Users/asas/UnityProjects/third-person-multiplayer && git log"}, None),
+        # a cd into a path that contains "unity" must not trip the CLI rule
+        ("Bash", {"command": "cd /c/dev/UnityProjects/my-game && git log"}, None),
         ("Read", {"file_path": "C:/repo/README.md"}, None),
         # ---- misfires measured in M-001. Every one of these fired in production. --------
         # Reads of the manifest are not changes to the manifest.

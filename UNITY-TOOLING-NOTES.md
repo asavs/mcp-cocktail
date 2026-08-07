@@ -1,7 +1,16 @@
 # Unity CLI & MCP — Working Notes
 
 A shared, append-only log of how the `unity` CLI and the Unity MCP server
-actually behave, written by the humans and agents working in this repo.
+actually behave, written by the humans and agents who hit these things.
+
+**These notes are not about any one game.** They live in `mcp-cocktail` and are
+meant to be pointed at whatever Unity project you are working in. Where an entry
+says *this project* or *this repo* it means the Unity project the observation was
+measured against — see
+[Environment](#environment-these-notes-were-taken-against). Trial reports under
+`docs/trials/` name that project directly, on purpose: they are dated evidence
+written by the agent that ran the arm, and editing them to look portable would
+destroy what makes them evidence.
 
 **Purpose:** both tools are new and (in the CLI's case) explicitly experimental.
 Their rough edges cost real time to rediscover. Write them down once.
@@ -74,6 +83,11 @@ next agent will read.
 | Unity Editor | `6000.5.5f1` (Unity 6.5, stream: SUPPORTED) |
 | OS | Windows 11, PowerShell 5.1 + Git Bash |
 | MCP | `unity mcp` (official, via CLI) registered as `unity-editor-mcp` |
+| Reference project | `third-person-multiplayer` — a URP third-person game with terrain, networking and a large prop count. Every measured figure below (scene sizes, timings, the `Armature.fbx` humanoid reference) came from it or its `-gabe` sibling checkout |
+
+An entry that quotes a measurement is quoting *that* project. The behaviour it
+describes is Unity's; the number is one project's. Re-measure before treating a
+figure as a threshold somewhere else.
 
 ---
 

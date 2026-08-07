@@ -25,8 +25,15 @@
 
 set -uo pipefail
 
-PROJECT="${UNITY_TRIAL_PROJECT:-C:/Users/asas/UnityProjects/third-person-multiplayer-gabe}"
-CLI_DIR="${UNITY_CLI_DIR:-C:/Users/asas/AppData/Local/Unity/bin}"
+# The Unity project to run the trial against. There is no sensible default -- this repo is
+# the record, not a Unity project -- so it must be supplied.
+PROJECT="${UNITY_TRIAL_PROJECT:-}"
+if [ -z "$PROJECT" ]; then
+  echo "UNITY_TRIAL_PROJECT is not set. Point it at the Unity project to run the trial in:" >&2
+  echo "  UNITY_TRIAL_PROJECT=/c/path/to/your-unity-project ./three-way-setup.sh" >&2
+  exit 2
+fi
+CLI_DIR="${UNITY_CLI_DIR:-$LOCALAPPDATA/Unity/bin}"
 COPLAY_URL="http://127.0.0.1:8080"
 MCP_NAME="UnityMCP"
 

@@ -4,7 +4,7 @@ Driving the Unity Editor from an AI agent. Written against CLI `1.0.0-beta.3`,
 editor `6000.5.5f1`, Pipeline `0.4.0-exp.1`, MCP for Unity `v10.0.0`,
 2026-07-28.
 
-There are **two different MCP servers** that can drive this project. They are
+There are **two different MCP servers** that can drive a Unity project. They are
 unrelated implementations.
 
 | | Unity official | CoplayDev |
@@ -28,11 +28,11 @@ start its server; see the setup sections below.
 
 Order matters. Each step looks fine when it isn't, so do them in sequence.
 
-**1. Confirm the Pipeline package is present.** It's already committed to
-`Packages/manifest.json` in this repo, so a fresh clone has it. The MCP server
-exposes *zero tools* without it, while still reporting itself connected — if
-you're setting this up somewhere the package isn't in the manifest yet, add it
-with:
+**1. Confirm the Pipeline package is present.** Check your Unity project's
+`Packages/manifest.json` — once it is committed there, a fresh clone has it. The
+MCP server exposes *zero tools* without it, while still reporting itself
+connected, so this is the first thing to verify and the easiest to assume. If
+it is not in the manifest yet, add it with:
 
 ```bash
 cd <repo>
@@ -65,8 +65,9 @@ emits it**, not as something to copy: its `--` lands after `unity mcp` rather
 than before it, where convention would put it. It works — the resulting entry
 is `{"command": "unity", "args": ["mcp", "--project-path", "<repo>"]}` — but
 type the conventional form if you're running it by hand. Note that's **user scope with a hardcoded project
-path**: global across your machine but pinned to this project. Re-scope it if
-you work on more than one Unity project.
+path**: global across your machine but pinned to whichever project you ran it
+against. Re-scope it if you work on more than one Unity project — which, if you
+are using this record at all, you probably do.
 
 That registration deliberately stores bare `unity`, not an absolute path. On
 Windows, GUI applications inherit a snapshot of the user PATH when their

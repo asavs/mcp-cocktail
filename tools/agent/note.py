@@ -43,16 +43,20 @@ for _s in (sys.stdout, sys.stderr):
         pass
 
 
-def repo_root() -> Path:
-    try:
-        out = subprocess.run(["git", "rev-parse", "--show-toplevel"],
-                             capture_output=True, text=True, check=True)
-        return Path(out.stdout.strip())
-    except Exception:
-        return Path.cwd()
+def record_root() -> Path:
+    """Where the record lives — derived from this file, never from the cwd.
+
+    These scripts run from inside *other* repositories: as a hook, or as a one-line
+    capture during unrelated work. `git rev-parse --show-toplevel` resolves to whatever
+    project is being worked on, so the previous version of this function wrote the inbox
+    into the game repo that happened to be current. Set `MCP_COCKTAIL_DIR` if the record
+    is somewhere other than two levels above this file.
+    """
+    env = os.environ.get("MCP_COCKTAIL_DIR")
+    return Path(env) if env else Path(__file__).resolve().parents[2]
 
 
-INBOX = repo_root() / "docs" / "findings-inbox.md"
+INBOX = record_root() / "docs" / "findings-inbox.md"
 
 HEADER = """# Findings inbox
 
