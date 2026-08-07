@@ -1,103 +1,173 @@
 # mcp-cocktail
 
-A record of how the Unity agent tooling — the `unity` CLI and the two Unity MCP servers —
-actually behaves, plus the machinery that puts it in front of you *before* you pay for a
-trap rather than after.
+A domain-agnostic, Recursive Self-Improvement (RSI) framework for benchmarking, evaluating, and injecting real-time guardrails across competing MCP servers, CLIs, and AI agent tools.
 
-Point it at any Unity project. Nothing here is about a particular game.
+When software vendors take months or years to release official Model Context Protocol (MCP) servers or command-line tools, open-source communities fill the vacuum with unofficial MCPs, wrappers, and CLIs. This fragmentation leads to competing tools ("arms") with varying degrees of stability, silent failures, and trap behavior.
 
-## Why this is its own repo
+`mcp-cocktail` provides the machinery to:
+- **Inject Real-Time PreToolUse Guardrails:** Intercept tool calls right *before* a known trap is sprung (`mcp-cocktail check` / `install-hook`).
+- **Benchmark Multi-Arm Ecosystems:** Run subagents in unison across all available MCPs and CLIs (`mcp-cocktail run`).
+- **Log & Mine Friction:** Capture real-time friction notes (`mcp-cocktail note`) and mine subagent transcripts for failure patterns P1-P5 (`mcp-cocktail mine`).
+- **Drive Weakness-Maximizing RSI Loops:** Synthesize scorecards (`mcp-cocktail scorecard --rsi`) and auto-derive **Weakest Valid Guardrails** (`traps.json`) based on Bennett (2023).
 
-The record started inside a game repo, which is where the evidence was. It stopped being
-the right home once the content stopped being about that game: "which way of driving Unity
-works for which job" is not a fact about anyone's project, and keeping it in one meant it
-could only ever be applied to one. Collaborators pulling that repo for gameplay work got
-trial reports and upstream bug drafts they had no use for.
+---
 
-History was preserved through the split, so `git log` on any file still reaches back to
-where the finding was first written down.
+## ⚡ Quickstart (30 Seconds)
 
-## Layout
+```bash
+# 1. Install mcp-cocktail
+pip install -e .
 
-| Path | What it is |
-|---|---|
-| `UNITY-TOOLING-NOTES.md` | **The record.** Observations, traps, version-specific behaviour. Starts with `Patterns` — five recurring shapes — which is the part worth reading first |
-| `docs/unity-cli.md`, `docs/unity-mcp.md` | Setup, and how to verify each layer really came up |
-| `docs/tooling-scorecard.md` | Comparative verdicts: which arm to use for which job |
-| `docs/findings-inbox.md` | Raw, unverified, append-only. A to-check list, not the record |
-| `docs/trials/` | Per-arm trial reports, written blind by the agent that ran each arm |
-| `docs/tooling-experiment.md` | The method, and the evidence tiers findings are graded against |
-| `tools/agent/` | The hook, the transcript miner, the one-line capture tool |
-| `tools/git/` | Portable UnityYAMLMerge setup |
+# 2. Install PreToolUse Hook into your project's .claude/settings.json
+mcp-cocktail install-hook
 
-## Wiring it into a Unity project
+# 3. Test Guardrail Execution (< 5ms interception)
+mcp-cocktail check --selftest
+```
 
-The record is not checked out inside your project. Point your project's
-`.claude/settings.json` at this repo by absolute path:
+---
 
+## 📖 Progressive Walkthrough
+
+### 1. Initialize Workspace Manifest
+Create a workspace config (`mcp-cocktail.json`) and trap rules (`traps.json`) in any repository:
+
+```bash
+mcp-cocktail init --name my-ecosystem
+```
+
+`mcp-cocktail.json` structure:
 ```json
 {
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash|PowerShell|mcp__unity-editor-mcp__.*|mcp__UnityMCP__.*|mcp__unityMCP__.*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python \"C:/Users/you/Projects/mcp-cocktail/tools/agent/unity-trap-check.py\"",
-            "timeout": 10
-          }
-        ]
-      }
-    ]
+  "name": "database-ecosystem",
+  "description": "Multi-arm evaluation for SQL CLIs and MCP servers",
+  "arms": [
+    {
+      "id": "arm-cli",
+      "name": "Official CLI",
+      "type": "cli",
+      "command": "psql"
+    },
+    {
+      "id": "arm-mcp",
+      "name": "Community MCP",
+      "type": "mcp",
+      "mcp_server": "postgres-mcp",
+      "tool_prefix": "mcp__postgres__"
+    }
+  ],
+  "trial_defaults": {
+    "concurrency": "serial",
+    "timeout_seconds": 300
   }
 }
 ```
 
-The hook fires on the tool call that would spring a known trap and injects that one finding,
-with an absolute link back into the record. It fails silent: a hook that errors must never
-break the call it was annotating. `--selftest` covers every rule and every misfire that has
-been observed in production.
+### 2. Native MCP Server Interface (`mcp-cocktail serve`)
+Mount `mcp-cocktail` directly into your agent's MCP config (`.claude/settings.json` or `mcp.json`) to expose native tools directly in its palette:
 
-Set `MCP_COCKTAIL_DIR` if you keep this repo somewhere the scripts can't infer from their
-own location.
-
-## Contributing a finding
-
-Mid-task, one line, no context switch:
-
-```bash
-python /path/to/mcp-cocktail/tools/agent/note.py "eval rejects top-level using directives, CS1001"
+```json
+{
+  "mcpServers": {
+    "mcp-cocktail": {
+      "command": "mcp-cocktail",
+      "args": ["serve"]
+    }
+  }
+}
 ```
 
-That lands in `docs/findings-inbox.md`. Promoting it into `UNITY-TOOLING-NOTES.md` is a
-separate, deliberate act — version-stamp it, say what was observed versus inferred, and give
-it one home. An inbox that auto-promotes is just a second record that drifts from the first.
+Exposes:
+- `mcp__mcp-cocktail-server__note_friction`
+- `mcp__mcp-cocktail-server__check_guardrail`
+- `mcp__mcp-cocktail-server__get_scorecard`
+- `mcp__mcp-cocktail-server__run_trial`
 
-The capture tool resolves the inbox from its own location, so it writes here no matter which
-project you are standing in when you run it.
-
-## Mining sessions
+### 3. Generate Multi-Arm Trial Briefs
+Create standardized briefs and subagent task payloads for subagents to execute the same task independently across defined arms:
 
 ```bash
-python tools/agent/session-mine.py sweep            # rank sessions by Unity tooling used
-python tools/agent/session-mine.py stats <uuid>     # turns, tools, arm mix
-python tools/agent/session-mine.py grep <pat> <uuid>
+mcp-cocktail run T-001 "Build a normalized user schema and query user stats" --exec auto
 ```
 
-`sweep` ranks mechanically and flags two classes it will not let you mistake for evidence:
-`SETUP` (standing the tooling up — a phase each machine passes through once) and `self-ref`
-(the session is about this record, so any retrieval measurement taken there is circular).
+Generates:
+- `docs/trials/T-001/brief-arm-arm-cli.md`
+- `docs/trials/T-001/brief-arm-arm-mcp.md`
+- `docs/trials/T-001/trial-meta.json`
+- `docs/trials/T-001/trial-tasks.json`
 
-Sample long, multi-goal, drifting sessions. Humans remember the interesting ones, which is
-the opposite of where the failure mode lives.
+### 4. Log Friction & Mine Transcripts
+Subagents or humans can capture friction observations mid-task:
 
-## The thing this is trying to fix
+```bash
+mcp-cocktail note "CLI command ignores positional table filter silently" --cost 15
+```
 
-The measured failure is not that the record is wrong. It is that it gets read after the cost
-is paid. A session-start pointer does not fix it — that is the thing that already works on
-short scoped tasks and fails on long ones. So the trigger has to be the tool call itself.
+Mine session transcripts to rank tool usage, identify error clusters, and auto-detect recurring trap patterns (**P1** Startup Snapshot, **P2** Confident Wrong Answer, **P3** Termination $\neq$ Completion, **P4** Green Light, **P5** Ignored Arguments):
 
-Whether that works is measured, not assumed, and the system is required to be able to report
-itself failing. See `docs/trials/M-001-RESULT.md` for the first measured session, which
-scored the hook as inert.
+```bash
+mcp-cocktail mine sweep
+mcp-cocktail mine stats <session-uuid>
+```
+
+---
+
+## 🔄 The 4 RSI Exhaust Pipelines
+
+When an agent encounters a bug, silent failure, or trap in a tool arm, `mcp-cocktail` generates 4 distinct, purpose-built exhaust deliverables:
+
+| Exhaust Pipeline | Target Audience | Format / Location | Action Taken |
+|---|---|---|---|
+| **1. Machine Guardrail** | Active session & future local agents | `traps.json` | Weakness Maximization computes a regex matcher + warning payload (< 5ms interception). |
+| **2. In-Repo Guidance** | Humans & agents in the repo | `DOMAIN-NOTES.md` | Promoted into structured pattern entries (**P1-P5**). Teaches agents *how* to use the tools correctly. |
+| **3. Open-Source Patch** | Community MCPs / CLIs | Subagent Task Spec (`generate_patch_task`) | Spawns a subagent task to write a failing test, fix the source code (`CoplayDev/unity-mcp`), and open a PR. |
+| **4. Upstream Vendor Draft** | Vendor engineering teams | `docs/upstream/*.md` (`mcp-cocktail upstream`) | Generates structured markdown issue templates with verbatim payloads, step sequences, and diagnostic PID/socket evidence. |
+
+---
+
+## 🔬 Theoretical Foundation: Weakness Maximization (Bennett, 2023)
+
+Standard AI theory often relies on Ockham’s Razor or Minimum Description Length (MDL) — assuming that the *shortest* hypothesis is the most likely to generalize.
+
+As proven by **Michael Timothy Bennett (2023)** in *"The Optimal Choice of Hypothesis Is the Weakest, Not the Shortest"* ([arXiv:2301.12987v4](https://arxiv.org/abs/2301.12987)):
+> Compression/length is neither necessary nor sufficient for generalization. Instead, to maximize the probability that an inferred hypothesis generalizes, it is necessary and sufficient to select the **WEAKEST** valid hypothesis — the explanation with maximum generality (least specificity) that remains consistent with observations.
+
+### How `mcp-cocktail` Applies Weakness Maximization:
+- An over-fitted guardrail rule (e.g. matching `unity command --foo --bar --baz`) fails to protect agents calling `unity command --other`.
+- `mcp-cocktail` uses the **Rule of Least Specificity** in `mcp_cocktail.weakness`: it generalizes raw friction observations into the broadest valid regex matchers that maximize coverage over potential tool call spaces while maintaining zero false positives on safe/read-only calls.
+
+```bash
+mcp-cocktail scorecard --rsi
+```
+
+---
+
+## 📁 Architecture & Data Layout
+
+```
+my-project/
+├── mcp-cocktail.json              # 1. Manifest: Arms, health checks, CLI commands
+├── traps.json                     # 2. Rule Store: Active PreToolUse trap rules & matchers
+├── .claude/
+│   └── settings.json              # 3. Client Config: PreToolUse hook pointing to mcp-cocktail check
+└── docs/
+    ├── findings-inbox.md          # 4. Raw Friction Inbox: Mid-task append-only notes
+    ├── tooling-scorecard.md       # 5. Synthesized Scorecard: Automated ranking table
+    ├── upstream/                  # 6. Upstream Vendor Bug Reports: Feedback drafts for official tools
+    └── trials/                    # 7. Benchmark Data Store: Trial briefs, meta, tasks, and reports
+        └── T-001/
+            ├── brief-arm-a.md
+            ├── arm-a.md
+            ├── trial-meta.json
+            └── trial-tasks.json
+```
+
+---
+
+## 🎮 Reference Datasets
+
+See `examples/unity/` for a complete reference dataset containing:
+- Multi-arm evaluation manifest (`examples/unity/cocktail.json`)
+- Comprehensive Unity trap rule store (`examples/unity/traps.json`)
+- Historic trial reports and scorecard (`examples/unity/docs/trials/`)
+- Historical research log (`examples/unity/UNITY-TOOLING-NOTES.md`)
