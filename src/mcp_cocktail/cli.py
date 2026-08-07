@@ -14,6 +14,7 @@ from mcp_cocktail.guardrail import run_guardrail, selftest as guardrail_selftest
 from mcp_cocktail.inbox import append_note, show_inbox
 from mcp_cocktail.installer import install_hook, uninstall_hook
 from mcp_cocktail.miner import cmd_sweep, print_sweep_report, summarize_transcript, parse_blocks
+from mcp_cocktail.proxy import run_proxy
 from mcp_cocktail.runner import create_trial
 from mcp_cocktail.scorecard import generate_scorecard, propose_rsi_guardrails, generate_upstream_bug_draft
 from mcp_cocktail.server import run_mcp_server
@@ -144,6 +145,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return run_mcp_server()
 
 
+def cmd_proxy(args: argparse.Namespace) -> int:
+    return run_proxy(args.target_cmd)
+
+
 def cmd_note(args: argparse.Namespace) -> int:
     if args.show:
         print(show_inbox(args.inbox))
@@ -256,6 +261,9 @@ def main(argv: list[str] | None = None) -> int:
 
     subparsers.add_parser("serve", help="Run stdio MCP server for mcp-cocktail tools")
 
+    p_proxy = subparsers.add_parser("proxy", help="Run transparent stdio MCP proxy wrapping a target server command")
+    p_proxy.add_argument("target_cmd", nargs=argparse.REMAINDER, help="Target MCP server executable and arguments")
+
     p_hook = subparsers.add_parser("install-hook", help="Install PreToolUse hook into harness configuration")
     p_hook.add_argument("--harness", default="auto", help="Target harness (claude, omp, mcp, auto)")
     p_hook.add_argument("--global", dest="global_settings", action="store_true", help="Target global settings")
@@ -301,6 +309,7 @@ def main(argv: list[str] | None = None) -> int:
         "setup": cmd_setup,
         "check": cmd_check,
         "serve": cmd_serve,
+        "proxy": cmd_proxy,
         "install-hook": cmd_install_hook,
         "note": cmd_note,
         "upstream": cmd_upstream,
