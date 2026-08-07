@@ -153,6 +153,53 @@ RULES: list[tuple[str, int, str | None, str | None, str]] = [
         f"without `.driver` kills every Unity-asset merge. ({NOTES}#git--unityyamlmerge)",
     ),
     # ---- Anti-capabilities: things that fail only after you have paid --------------------
+    # ---- Authoring, from the arm-B sessions. The CLI/MCP surface is not where long
+    # ---- sessions lose time; Unity's own semantics are. See docs/trials/M-001-RESULT.md Q5.
+    (
+        "import-globalscale", 0,
+        r"^mcp__unity-editor-mcp__set_import_settings$",
+        r"globalScale|useFileScale",
+        "Do NOT resize a humanoid with `ModelImporter.globalScale`. It builds an Avatar that "
+        "passes every static check — `isValid`, `isHuman`, all bones mapped, correct bind pose "
+        "— and collapses the skeleton the instant a controller with real clips retargets onto "
+        "it. The tell is `Animator.humanScale` (0.011 vs 6.109 for the same character). Import "
+        "with `useFileScale = true` and scale the ROOT TRANSFORM instead, matched to hips "
+        f"height rather than total height. ({NOTES}#humanoid-import-scale-the-root-never-globalscale)",
+    ),
+    (
+        "collider-root-scale", 0,
+        r"^mcp__unity-editor-mcp__(set_component_properties|set_serialized_field)$",
+        r"skinWidth|stepOffset|CharacterController|CapsuleCollider|SpringBoneCollider",
+        "On a scaled prefab root, collider properties do NOT all follow the scale. "
+        "`height`/`radius`/`center` do — divide by the root scale. `skinWidth`, `stepOffset` "
+        "and `SpringBoneCollider.radius` are raw world metres and do not. Getting it wrong is "
+        "silent: the character floats or sinks. `skinWidth` especially — the character rests "
+        "exactly that far above the ground. Set it, enter play mode, and measure where the "
+        f"character actually settles. ({NOTES}#a-scaled-prefab-root-does-not-scale-every-collider-property)",
+    ),
+    (
+        "empty-motion-slots", 0,
+        r"^mcp__unity-editor-mcp__(create_animator_controller|add_animator_state|add_animator_layer)$",
+        None,
+        "A humanoid state whose blend tree has no motion assigned does not do nothing — it "
+        "writes a DEGENERATE POSE. Hips go from +0.981 to -0.138 relative to the root on "
+        "assignment, and the character stands buried ~1.1 m in the floor. It reads as a rigging "
+        "or import bug. Assign a controller only once its states have real clips; check with "
+        f"`hips.position.y - root.position.y` before and after. ({NOTES}#an-animator-controller-with-empty-motion-slots-writes-a-degenerate-pose)",
+    ),
+    (
+        "bone-write-timing", 0,
+        r"^mcp__unity-editor-mcp__eval(_file)?$",
+        r"GetBoneTransform|HumanBodyBones|localRotation\s*=|bone\w*\.rotation\s*=",
+        "Two traps on procedural bone writes, both silent. (1) The Animator evaluates BETWEEN "
+        "`Update` and `LateUpdate`, so a bone write from `Update` is discarded whenever a "
+        "controller is running — write in `LateUpdate`. (2) With NO controller the Animator "
+        "never evaluates, so nothing restores the pose between frames and additive writes "
+        "STACK: 60 additive 1-degree writes drifted a bone a measured 60 degrees in one second. "
+        "Capture rest rotations in `Awake` and compose `offset * parentRotation * "
+        "restLocalRotation`. The naive version is idempotent under a running controller, so it "
+        f"breaks only when testing a character in isolation. ({NOTES}#procedural-bone-writes-must-compose-from-a-captured-rest-pose)",
+    ),
     (
         "hierarchy-no-pagination", 0,
         r"^mcp__unity-editor-mcp__(get_scene_hierarchy|find_gameobjects)$", None,
@@ -253,7 +300,9 @@ def save_state(path: str, state: dict) -> None:
 # here, which meant writing the string "Packages/manifest.json" into a markdown file fired
 # the manifest rule. Editing a document that mentions a trap is not the trap. No rule in
 # this file needs to see file bodies — they all match a command verb or a target path.
-TARGET_KEYS = ("command", "file_path", "path")
+# `code` is included because for `eval` it *is* the command — the payload being executed,
+# not a document being written. Without it, every MCP rule can only select on tool name.
+TARGET_KEYS = ("command", "file_path", "path", "code")
 
 # A segment that only inspects. Every trap in the record is about *mutating* or *invoking*
 # something; `git diff Packages/manifest.json` and `grep unity docs/unity-cli.md` are
@@ -446,6 +495,19 @@ def selftest() -> int:
         ("Bash", {"command": "cat notes.md; unity auth login"}, "cli-auth-login"),
         # ...and editing the manifest itself still fires.
         ("Write", {"file_path": "C:/repo/Packages/manifest.json"}, "manifest-while-running"),
+        # ---- authoring rules mined from 69735fe7 (271 arm-B calls) ---------------------
+        ("mcp__unity-editor-mcp__set_import_settings",
+         {"path": "Assets/x.fbx", "settings": "{}", "code": "globalScale=0.0018"}, "import-globalscale"),
+        ("mcp__unity-editor-mcp__set_import_settings",
+         {"path": "Assets/x.png"}, "!import-globalscale"),
+        ("mcp__unity-editor-mcp__set_component_properties",
+         {"code": "skinWidth", "path": "Player"}, "collider-root-scale"),
+        ("mcp__unity-editor-mcp__set_component_properties", {"path": "Player"}, "!collider-root-scale"),
+        ("mcp__unity-editor-mcp__create_animator_controller", {}, "empty-motion-slots"),
+        ("mcp__unity-editor-mcp__add_animator_state", {}, "empty-motion-slots"),
+        ("mcp__unity-editor-mcp__eval",
+         {"code": "var h = a.GetBoneTransform(HumanBodyBones.Hips);"}, "bone-write-timing"),
+        ("mcp__unity-editor-mcp__eval", {"code": "Debug.Log(1);"}, "!bone-write-timing"),
     ]
     ok = True
     for tool_name, tool_input, expect in cases:

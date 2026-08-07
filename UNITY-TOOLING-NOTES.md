@@ -618,6 +618,70 @@ Nothing flags it: not the editor, not the console, not the import log. **The tel
 stride length in retargeted locomotion clips follows leg length, so matching hips avoids foot
 sliding. The reference in this project is `Armature.fbx`: hips at `y = 0.981`, `humanScale 1.010`.
 
+### An animator controller with empty motion slots writes a degenerate pose
+
+**`[reproduced]` A humanoid state whose blend tree has no motion assigned does not do nothing —
+it writes a broken pose.** Hips drop from `+0.981` to `−0.138` relative to the root the moment
+the controller is assigned and `Rebind()`/`Update(0f)` run; the character stands buried about
+1.1 m into the floor.
+
+The failure reads as a rigging or import problem, because the model was fine a second ago and
+nothing errored. **Do instead:** assign a controller only once its states have real clips. To
+confirm it is this and not the model, read `hips.position.y - root.position.y` before and after
+assigning — the sign flip is unambiguous.
+
+### A scaled prefab root does not scale every collider property
+
+**`[reproduced]` Some collider fields are local and follow the root's scale; some are raw world
+metres and do not.** Mixing them up is silent — the character floats or sinks and nothing
+reports anything. Measured on a root at `localScale 0.1811`:
+
+| Property | Follows root scale? |
+|---|---|
+| `CapsuleCollider` / `CharacterController` — `height`, `radius`, `center` | **Yes** — divide by the root scale when authoring |
+| `CharacterController.skinWidth` | **No** — raw world metres |
+| `CharacterController.stepOffset` | **No** — raw world metres |
+| `SpringBoneCollider.radius` | **No** — raw world metres |
+
+`skinWidth` is the one that bites, because the character rests exactly `skinWidth` above the
+ground: dividing it by the root scale like the neighbouring fields floated the character 11 cm
+into the air. **Do instead:** set the value, enter play mode, and measure where the character
+actually settles. This is [P4](#patterns) — the inspector showing the number you typed proves
+only that the field took the number.
+
+### Procedural bone writes must compose from a captured rest pose
+
+**`[reproduced]` With no animator controller the Animator never evaluates, so nothing rewrites
+the skeleton between frames and an additive bone write stacks.** Sixty additive 1° writes — one
+second at 60 fps — drifted a bone a measured 60°, folding the character inside out. Verified
+first by writing a bone +20° and finding it still there many frames later.
+
+**Do instead:** capture rest rotations in `Awake` and compose
+`offset * parentRotation * restLocalRotation` each frame, rather than `offset * bone.rotation`.
+
+The trap is that the naive version is **idempotent under a running controller**, which supplies
+a fresh pose every frame. So it works in every normal scene and breaks only where a controller
+is absent — which is exactly the configuration used to test a character in isolation.
+
+### Bone writes belong in `LateUpdate`; the Animator evaluates between the two
+
+**`[reproduced]`** The Animator evaluates between `Update` and `LateUpdate`, so any bone write
+issued from `Update` is discarded before anything is drawn whenever a controller is running.
+Nothing warns; the write simply has no effect.
+
+Blend shapes behave differently and the difference was itself a corrected claim: an
+`Update`-time blend shape write **does** survive here. Writing them in `LateUpdate` is still
+worth doing, but defensively — so a host controller with a facial animation layer cannot
+overwrite them — not because `Update` fails. An earlier revision of the source document
+asserted the opposite; it was observed in a different project setup and does not reproduce.
+
+### Ground raycasts must exclude the character's own colliders
+
+**`[reproduced]`** A character with a body capsule and a naive downward raycast hits itself,
+snaps to the top of its own collider, and climbs into the sky a step at a time. Obvious in
+hindsight, cost real time, and the symptom looks like a physics or terrain bug rather than a
+layer-mask mistake.
+
 ### Verify humanoid poses in play mode, never edit mode
 
 **`[reproduced]`** `AnimationMode.SampleAnimationClip` and `AnimationClip.SampleAnimation` both
@@ -941,6 +1005,48 @@ See issue #1 for the full write-up. Key findings:
 ## Log
 
 Newest first.
+
+### 2026-08-07 — the record was aimed at setup, and the arm ratio was the symptom
+
+M-001 asked which arms a real development session uses, on the theory that a CLI-heavy record
+might be aimed at the wrong surface. It is, but not in the way the question assumed.
+
+Measured across every session the sweep has seen, by the sweep's own flags:
+
+| session class | sessions | arm A (CLI) | arms B/C (MCP) |
+|---|---|---|---|
+| `SETUP` | 3 | 36 | 11 |
+| `self-ref` | 5 | 42 | 75 |
+| **unflagged — real work** | 3 | **8** | **351** |
+
+The CLI weight is not a preference anyone chose. It is an artifact of *who wrote the record*:
+setup sessions fight the CLI, because that is what standing the tooling up consists of, and
+those sessions plus the ones about this file are most of what has ever been mined. The sweep
+already excludes both classes when **measuring** retrieval. Nothing excluded them when
+**sourcing** findings.
+
+Then the deeper correction. Mining `69735fe7` — 462 calls, 271 of them arm B, the largest and
+only pure-arm-B session in the corpus, and the one already cited above as paying for thirteen
+traps with zero consults — produced almost nothing about the MCP surface. **271 MCP calls
+yielded 15 tool-level errors.** What actually cost that session time was Unity's own semantics:
+empty blend trees, root scale not propagating to every collider field, `Update` versus
+`LateUpdate`, additive bone writes, a raycast hitting its own capsule.
+
+So the useful statement is not "the record needs more arm-B rules." It is that **the arm barely
+matters.** The tooling surface is where a session spends its first hour; Unity's behaviour is
+where it spends the other eighteen. A record weighted toward driving the tools will keep
+missing, whichever arm it names.
+
+Seven gotchas had been written up, reproduced and corrected in
+`Assets/Claudesona/README.md` on `claude/claudesona-npc`. **One of the seven had reached this
+file.** The other six are now in [Authoring](#authoring-assets-and-animation), and four became
+hook rules — `import-globalscale`, `collider-root-scale`, `empty-motion-slots`,
+`bone-write-timing`. Rule balance went from 11 CLI / 5 MCP to 11 / 9, though as above that
+ratio is the less interesting number.
+
+Method note, and the reason this is a Log entry rather than a quiet edit: the findings existed,
+verified, for two days, in a file nobody would think to grep. Mining transcripts is not the only
+gap. **Findings written into a deliverable do not reach the record on their own.**
 
 ### 2026-08-06 (last) — the arms mutate properties through different layers, and it matters
 
