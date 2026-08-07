@@ -33,6 +33,16 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+# Transcripts are full of box-drawing characters that kill the default Windows
+# console codec. Set our own stdout rather than relying on the caller to export
+# PYTHONIOENCODING -- a tool that only works when you remember an env var is a
+# tool that gets reported as broken.
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 PROJECTS = Path(os.path.expanduser("~/.claude/projects"))
 
 # Which arm a tool call belongs to. A and B are one stack but reached
