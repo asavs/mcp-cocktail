@@ -17,6 +17,8 @@ class ArmConfig:
     command: str | None = None
     mcp_server: str | None = None
     tool_prefix: str | None = None
+    description: str = ""
+    capabilities: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     setup_script: str | None = None
     health_check: str | None = None
@@ -26,9 +28,14 @@ class ArmConfig:
     def from_dict(cls, data: dict[str, Any]) -> ArmConfig:
         known = {
             "id", "name", "type", "command", "mcp_server",
-            "tool_prefix", "env", "setup_script", "health_check"
+            "tool_prefix", "description", "capabilities", "env",
+            "setup_script", "health_check"
         }
         extra = {k: v for k, v in data.items() if k not in known}
+        caps = data.get("capabilities", [])
+        if isinstance(caps, str):
+            caps = [caps]
+
         return cls(
             id=data["id"],
             name=data.get("name", data["id"]),
@@ -36,6 +43,8 @@ class ArmConfig:
             command=data.get("command"),
             mcp_server=data.get("mcp_server"),
             tool_prefix=data.get("tool_prefix"),
+            description=data.get("description", ""),
+            capabilities=caps,
             env=data.get("env", {}),
             setup_script=data.get("setup_script"),
             health_check=data.get("health_check"),
