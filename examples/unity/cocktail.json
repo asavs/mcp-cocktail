@@ -4,7 +4,7 @@
   "description": "Multi-arm evaluation manifest for Unity CLI and MCP servers (Official & Community)",
   "arms": [
     {
-      "id": "arm-a",
+      "id": "unity-cli",
       "name": "Unity CLI",
       "type": "cli",
       "command": "unity",
@@ -14,7 +14,7 @@
       "health_check": "unity status --json"
     },
     {
-      "id": "arm-b",
+      "id": "official-mcp",
       "name": "Official Unity MCP",
       "type": "mcp",
       "mcp_server": "unity-editor-mcp",
@@ -22,7 +22,7 @@
       "health_check": "curl -s http://127.0.0.1:7800/health"
     },
     {
-      "id": "arm-c",
+      "id": "coplay-mcp",
       "name": "CoplayDev Unity MCP",
       "type": "mcp",
       "mcp_server": "UnityMCP",
@@ -33,6 +33,7 @@
   ],
   "trial_defaults": {
     "concurrency": "serial",
+    "scene_strategy": "auto",
     "timeout_seconds": 300
   },
   "traps_file": "traps.json"

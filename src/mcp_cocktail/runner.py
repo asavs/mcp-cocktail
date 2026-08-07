@@ -21,7 +21,7 @@ class TrialSpec:
     timeout_seconds: int = 300
 
 
-BRIEF_TEMPLATE = """# Trial Brief — Arm {arm_id} ({arm_name})
+BRIEF_TEMPLATE = """# Trial Brief — {arm_name} (`{arm_id}`)
 
 **Task:**
 {task_description}
@@ -40,7 +40,7 @@ BRIEF_TEMPLATE = """# Trial Brief — Arm {arm_id} ({arm_name})
 5. **Log Friction:** Record every error, unexpected hang, silent failure, or unexpected behaviour verbatim.
 
 ## Deliverable
-Write your complete trial report to `docs/trials/{trial_id}/arm-{arm_id}.md`.
+Write your complete trial report to `docs/trials/{trial_id}/{arm_id}.md`.
 Include:
 - Exact tool calls executed in chronological order
 - Total steps & retries
@@ -62,7 +62,7 @@ def generate_arm_brief(trial: TrialSpec, arm: ArmConfig) -> str:
         arm_details_lines.append(f"- **Environment Vars:** `{json.dumps(arm.env)}`")
 
     if trial.scene_strategy == "temp_scene":
-        scene_instructions = f"Work inside a dedicated temporary scene file: `Assets/Scenes/Trial_{trial.id}_Arm_{arm.id}.unity`. Duplicate baseline scene before mutating."
+        scene_instructions = f"Work inside a dedicated temporary scene file: `Assets/Scenes/Trial_{trial.id}_{arm.id}.unity`. Duplicate baseline scene before mutating."
     else:
         scene_instructions = "Work in the baseline active scene. The trial runner will reset scene state (git checkout) upon trial completion."
 
@@ -99,7 +99,6 @@ def create_trial(
 
     target_arm_ids = arms_override or [a.id for a in config.arms]
 
-    # Resolve scene strategy
     if compare_visual or scene_strategy == "temp_scene":
         eff_strategy = "temp_scene"
     elif scene_strategy in ("instant_reload", "auto") or not scene_strategy:
@@ -122,7 +121,7 @@ def create_trial(
     for arm in config.arms:
         if arm.id in target_arm_ids:
             brief = generate_arm_brief(trial, arm)
-            brief_file = trial_dir / f"brief-arm-{arm.id}.md"
+            brief_file = trial_dir / f"brief-{arm.id}.md"
             brief_file.write_text(brief, encoding="utf-8")
             briefs[arm.id] = brief
 

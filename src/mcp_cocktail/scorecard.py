@@ -65,7 +65,9 @@ def generate_scorecard(config: CocktailConfig, root_dir: Path | str | None = Non
         for tdir in trials_dir.iterdir():
             if not tdir.is_dir():
                 continue
-            for rfile in tdir.glob("arm-*.md"):
+            for rfile in tdir.glob("*.md"):
+                if rfile.name.startswith("brief-"):
+                    continue
                 arm_id = rfile.stem[4:] if rfile.stem.startswith("arm-") else rfile.stem
                 if arm_id not in scores:
                     scores[arm_id] = ArmScore(arm_id=arm_id, arm_name=arm_id)

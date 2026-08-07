@@ -46,4 +46,4 @@ def test_cli_run(tmp_path: Path):
     with patch("pathlib.Path.cwd", return_value=tmp_path):
         res = main(["run", "T-100", "Execute test task"])
         assert res == 0
-        assert (tmp_path / "docs" / "trials" / "T-100" / "brief-arm-a1.md").exists()
+        assert (tmp_path / "docs" / "trials" / "T-100" / "brief-a1.md").exists()
