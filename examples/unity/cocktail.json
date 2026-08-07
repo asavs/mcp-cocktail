@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "name": "unity-ecosystem",
+  "description": "Multi-arm evaluation manifest for Unity CLI and MCP servers (Official & Community)",
+  "arms": [
+    {
+      "id": "arm-a",
+      "name": "Unity CLI",
+      "type": "cli",
+      "command": "unity",
+      "env": {
+        "MSYS_NO_PATHCONV": "1"
+      },
+      "health_check": "unity status --json"
+    },
+    {
+      "id": "arm-b",
+      "name": "Official Unity MCP",
+      "type": "mcp",
+      "mcp_server": "unity-editor-mcp",
+      "tool_prefix": "mcp__unity-editor-mcp__",
+      "health_check": "curl -s http://127.0.0.1:7800/health"
+    },
+    {
+      "id": "arm-c",
+      "name": "CoplayDev Unity MCP",
+      "type": "mcp",
+      "mcp_server": "UnityMCP",
+      "tool_prefix": "mcp__UnityMCP__",
+      "setup_script": "tools/trials/three-way-setup.sh",
+      "health_check": "curl -s http://127.0.0.1:8080/mcp"
+    }
+  ],
+  "trial_defaults": {
+    "concurrency": "serial",
+    "timeout_seconds": 300
+  },
+  "traps_file": "traps.json"
+}

@@ -1,0 +1,78 @@
+{
+  "version": "1.0",
+  "domain": "unity-ecosystem",
+  "rules": [
+    {
+      "id": "cli-open-no-path",
+      "message": "P2 — `unity open` with no path does NOT resolve the cwd. It launches a second, bare Editor on the project picker and reports no error. Pass an explicit path.",
+      "tool_matcher": "^(Bash|PowerShell)$",
+      "target_matcher": "\\bunity\\s+open\\s*(?:$|[|;&\\n])",
+      "cooldown_seconds": 0,
+      "read_only_ignore": true
+    },
+    {
+      "id": "cli-editors-running",
+      "message": "P2 — `unity editors running` has misreported which instance has the project open, listing both PIDs. Cross-check process command lines.",
+      "tool_matcher": "^(Bash|PowerShell)$",
+      "target_matcher": "\\bunity\\s+editors\\s+running\\b",
+      "cooldown_seconds": 0,
+      "read_only_ignore": true
+    },
+    {
+      "id": "cli-pipeline-list",
+      "message": "P2 — `unity pipeline list` resolves the CURRENT DIRECTORY as the project and invents a row when there isn't one. `cd` to the project first, use `--json`, and read `pipelineServer.isReachable`.",
+      "tool_matcher": "^(Bash|PowerShell)$",
+      "target_matcher": "\\bunity\\s+pipeline\\s+list\\b",
+      "cooldown_seconds": 0,
+      "read_only_ignore": true
+    },
+    {
+      "id": "cli-auth-login",
+      "message": "P1 — The Editor snapshots its cloud access token AT STARTUP. `unity auth login` must run BEFORE launching the Editor.",
+      "tool_matcher": "^(Bash|PowerShell)$",
+      "target_matcher": "\\bunity\\s+auth\\s+login\\b",
+      "cooldown_seconds": 0,
+      "read_only_ignore": true
+    },
+    {
+      "id": "manifest-while-running",
+      "message": "P1 — Unity does not resolve a `Packages/manifest.json` change made while it is running. The Editor must be restarted.",
+      "tool_matcher": "^(Bash|PowerShell|Edit|Write)$",
+      "target_matcher": "unity\\s+pipeline\\s+install|Packages[\\\\/]manifest\\.json",
+      "cooldown_seconds": 0,
+      "read_only_ignore": true
+    },
+    {
+      "id": "uv-install",
+      "message": "P1 — `uv` must be on the Editor's PATH at launch. Installing it while Unity runs leaves MCP reporting 'uv not found in PATH'.",
+      "tool_matcher": "^(Bash|PowerShell)$",
+      "target_matcher": "(winget\\s+install\\s+astral-sh\\.uv|\\buv\\s+self\\s+update\\b|pip\\s+install\\s+uv\\b)",
+      "cooldown_seconds": 0,
+      "read_only_ignore": true
+    },
+    {
+      "id": "cli-mcp-configure",
+      "message": "P3 — `unity mcp configure` does its work and then NEVER EXITS. Give it a timeout and verify side-effects rather than waiting on exit.",
+      "tool_matcher": "^(Bash|PowerShell)$",
+      "target_matcher": "\\bunity\\s+mcp\\s+configure\\b",
+      "cooldown_seconds": 0,
+      "read_only_ignore": true
+    },
+    {
+      "id": "yamlmerge",
+      "message": "P3 — UnityYAMLMerge blocks on a GUI on unparseable input. Pass `-h --fallback none` for non-interactive use.",
+      "tool_matcher": "^(Bash|PowerShell)$",
+      "target_matcher": "UnityYAMLMerge",
+      "cooldown_seconds": 0,
+      "read_only_ignore": true
+    },
+    {
+      "id": "coplay-write-no-echo",
+      "message": "P5 — CoplayDev writes do not echo state. Read the state back explicitly after any mutation.",
+      "tool_matcher": "^mcp__(UnityMCP|unityMCP)__manage_(gameobject|components|material|scriptable_object)$",
+      "target_matcher": null,
+      "cooldown_seconds": 0,
+      "read_only_ignore": true
+    }
+  ]
+}
