@@ -96,7 +96,7 @@ def main() -> None:
     meta = " · ".join(x for x in (stamp, f"{a.cost}min" if a.cost else "", session) if x)
     with INBOX.open("a", encoding="utf-8") as fh:
         fh.write(f"\n- **{meta}** — {text}\n")
-    print(f"recorded -> {INBOX.relative_to(repo_root())}")
+    print(f"recorded -> {INBOX.relative_to(record_root())}")
 
 
 if __name__ == "__main__":

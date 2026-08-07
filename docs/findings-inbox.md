@@ -28,3 +28,7 @@ Nothing here has been verified. Read it as a to-check list.
 - **2026-08-07 · from M-001** — a pre-existing CS0104 in the Claudesona package sat in Editor.log all session and surfaced in every log grep unrelated to the work - grepping Editor.log for 'error CS' returns other people's errors and there is no way to scope it to the current compile
 
 - **2026-08-07 · from M-001** — the trap-check hook matches on command text not command effect: it fired the manifest rule on 'git diff Packages/manifest.json' and the CLI rule on a grep of docs/unity-cli.md. 5 of 8 fires did not describe the call. Fired again on a Write to a .md file while writing this up
+
+- **2026-08-07 12:25 · 15min** — a project-scoped PreToolUse hook pointing at a script inside that same project makes the script undeletable mid-session: removing it makes every matched tool (Bash, Edit, Write) fail closed, and fixing settings.json needs exactly those tools. Point hooks outside the tree they guard, and make them exit 0 when the target is missing
+
+- **2026-08-07 12:25 · 5min** — note.py crashed on its own success message after a rename -- INBOX was written, then NameError. The write happens before the confirmation, so the entry landed and the tool looked like it failed
