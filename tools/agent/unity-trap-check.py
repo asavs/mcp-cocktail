@@ -12,11 +12,13 @@ Every rule below cites a finding that already exists in the record. This file ad
 claims; it is a retrieval mechanism, not a second copy of the notes. If a rule and the
 record disagree, the record is right and this file is stale.
 
-Wiring (NOT applied — a human should review and apply this)
------------------------------------------------------------
-Add to `.claude/settings.json`. Hooks are captured in a snapshot at session start
-(`setup_hooks_captured`), so this does not arm until a **new session** — which is itself
-an instance of P1, reads-once-at-startup.
+Wiring (applied in 0da28e2, project-scoped)
+-------------------------------------------
+In `.claude/settings.json`. This used to say the hook could not arm until a new session,
+because hooks are captured in a startup snapshot (`setup_hooks_captured`) — read out of
+the 2.1.222 binary, never run. It is wrong: measured twice, a hook added mid-session arms
+without a restart, first injection ~15 minutes into a session that predated the config.
+See docs/trials/M-001-RESULT.md. The symbol is real; the inference from it was not.
 
     "hooks": {
       "PreToolUse": [
@@ -247,33 +249,116 @@ def save_state(path: str, state: dict) -> None:
         pass  # a hook that fails must not break the tool call
 
 
+# What a call *targets*, never what it *writes*. `new_string` and `content` used to be in
+# here, which meant writing the string "Packages/manifest.json" into a markdown file fired
+# the manifest rule. Editing a document that mentions a trap is not the trap. No rule in
+# this file needs to see file bodies — they all match a command verb or a target path.
+TARGET_KEYS = ("command", "file_path", "path")
+
+# A segment that only inspects. Every trap in the record is about *mutating* or *invoking*
+# something; `git diff Packages/manifest.json` and `grep unity docs/unity-cli.md` are
+# neither, and both fired in M-001.
+READ_VERB = re.compile(
+    r"^(?:"
+    r"cd\s+(?:\"[^\"]*\"|'[^']*'|\S+)\s*$"          # a bare `cd` segment is just a prefix
+    r"|(?:git\s+(?:diff|log|show|status|ls-tree|ls-files|blame|branch|remote|config\s+--get)"
+    r"|grep|rg|cat|head|tail|sed\s+-n|awk|less|ls|find|wc|echo|type"
+    r"|Select-String|Get-Content|Get-ChildItem|Test-Path)\b"
+    r")",
+    re.IGNORECASE,
+)
+def split_segments(command: str) -> list[str]:
+    """Split on `&&`, `||`, `|`, `;` — but not inside quotes.
+
+    A naive `re.split` breaks `grep -nE 'unity-mcp|pipeline' file` and
+    `grep -n "a\\|b" file | head` into fragments that no longer look like reads, which
+    turns the read guard off exactly where it is needed most. Both are real commands from
+    the M-001 transcript.
+    """
+    segments, current, quote = [], [], None
+    i = 0
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            current.append(ch)
+            if ch == quote and (i == 0 or command[i - 1] != "\\"):
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+            current.append(ch)
+        elif ch in "&|;":
+            while i < len(command) and command[i] in "&|;":
+                i += 1
+            segments.append("".join(current))
+            current = []
+            continue
+        else:
+            current.append(ch)
+        i += 1
+    segments.append("".join(current))
+    return [s.strip() for s in segments if s.strip()]
+
+
 def command_text(tool_input: dict) -> str:
     parts = []
-    for key in ("command", "file_path", "path", "new_string", "content"):
+    for key in TARGET_KEYS:
         val = tool_input.get(key)
         if isinstance(val, str):
             parts.append(val)
     return "\n".join(parts)
 
 
-def evaluate(tool_name: str, tool_input: dict, state: dict, now: float) -> list[str]:
-    """Return the messages that should fire. Mutates `state`."""
-    text = command_text(tool_input)
-    fired: list[str] = []
+def is_read_only(command: str) -> bool:
+    """True when every segment of a shell command merely inspects.
 
-    for rule_id, cooldown, name_re, cmd_re, message in RULES:
+    Conservative on purpose: one segment that isn't recognisably a read makes the whole
+    command non-read-only, so a genuine `unity ...` buried after a `grep` still fires.
+    """
+    segments = split_segments(command)
+    return bool(segments) and all(READ_VERB.match(s) for s in segments)
+
+
+def matching_rules(tool_name: str, tool_input: dict) -> list[tuple[str, str]]:
+    """Rules whose selectors match this call, ignoring cooldown and state.
+
+    The single source of truth for *does this rule apply*. The selftest calls this rather
+    than re-deriving it: 703bf53 fixed a rule that was unreachable in production while a
+    duplicated selftest loop reported it passing.
+    """
+    text = command_text(tool_input)
+
+    # A shell command that only inspects cannot spring a trap. Suppresses the largest
+    # misfire class measured in M-001 (5 of 8 injections). Deliberately does not gate the
+    # first-touch pointer in evaluate() — that one fired correctly and is the only
+    # injection in that session that changed what happened next.
+    if tool_name in ("Bash", "PowerShell") and is_read_only(tool_input.get("command") or ""):
+        return []
+
+    hits = []
+    for rule_id, _cooldown, name_re, cmd_re, message in RULES:
         if name_re and not re.search(name_re, tool_name):
             continue
         if cmd_re and not re.search(cmd_re, text, re.IGNORECASE):
             continue
+        hits.append((rule_id, message))
+    return hits
+
+
+def evaluate(tool_name: str, tool_input: dict, state: dict, now: float) -> list[str]:
+    """Return the messages that should fire. Mutates `state`."""
+    fired: list[str] = []
+    cooldowns = {rule_id: cd for rule_id, cd, _n, _c, _m in RULES}
+
+    for rule_id, message in matching_rules(tool_name, tool_input):
         last = state.get(rule_id, 0)
-        if cooldown and (now - last) < cooldown:
+        if cooldowns[rule_id] and (now - last) < cooldowns[rule_id]:
             continue
         state[rule_id] = now
         fired.append(message)
 
     if UNITY_ISH.search(tool_name) and not state.get("_first_touch"):
         # Only counts as a Unity touch if it is an MCP call or actually mentions unity/uv.
+        text = command_text(tool_input)
         if tool_name.startswith("mcp__") or re.search(r"\bunity|\buv\b|UnityYAMLMerge", text, re.I):
             state["_first_touch"] = now
             fired.insert(0, FIRST_TOUCH)
@@ -344,18 +429,27 @@ def selftest() -> int:
         ("Bash", {"command": "git status --short"}, None),
         ("Bash", {"command": "cd /c/Users/asas/UnityProjects/third-person-multiplayer && git log"}, None),
         ("Read", {"file_path": "C:/repo/README.md"}, None),
+        # ---- misfires measured in M-001. Every one of these fired in production. --------
+        # Reads of the manifest are not changes to the manifest.
+        ("Bash", {"command": "git diff --stat Packages/ ; git diff Packages/manifest.json"}, None),
+        ("Bash", {"command": "grep -nE 'unity-mcp|pipeline' Packages/manifest.json"}, None),
+        ("Bash", {"command": "git ls-tree -r --name-only origin/main -- Assets/Game"}, None),
+        # Grepping the CLI's own documentation is not invoking the CLI.
+        ("Bash", {"command": 'grep -n "unity open\\|-projectPath" docs/unity-cli.md | head -20'}, None),
+        # Writing a document that mentions a trap is not springing it.
+        ("Write", {"file_path": "docs/trials/M-001-RESULT.md",
+                   "content": "the rule fired on Packages/manifest.json and unity pipeline list"}, None),
+        ("Edit", {"file_path": "docs/findings-inbox.md",
+                  "new_string": "hit the Packages/manifest.json trap again"}, None),
+        # ...but the read guard must not swallow a real call hidden behind a read.
+        ("Bash", {"command": "grep -n foo docs/unity-cli.md && unity pipeline list"}, "cli-pipeline-list"),
+        ("Bash", {"command": "cat notes.md; unity auth login"}, "cli-auth-login"),
+        # ...and editing the manifest itself still fires.
+        ("Write", {"file_path": "C:/repo/Packages/manifest.json"}, "manifest-while-running"),
     ]
     ok = True
     for tool_name, tool_input, expect in cases:
-        state: dict = {"_first_touch": 1}  # suppress the once-per-session banner
-        hits = []
-        text = command_text(tool_input)
-        for rule_id, cooldown, name_re, cmd_re, _msg in RULES:
-            if name_re and not re.search(name_re, tool_name):
-                continue
-            if cmd_re and not re.search(cmd_re, text, re.IGNORECASE):
-                continue
-            hits.append(rule_id)
+        hits = [rule_id for rule_id, _msg in matching_rules(tool_name, tool_input)]
         if expect is None:
             good = not hits
         elif expect.startswith("!"):

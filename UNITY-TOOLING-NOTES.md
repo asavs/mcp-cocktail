@@ -103,7 +103,21 @@ reports it is not there, and every retry/refresh/reload confirms the tool.
 | 3 | The Editor snapshots its **cloud access token** at startup. `unity auth login` against a running Editor never reaches it; `Project Settings > Services` stays signed out, which reads as *"I need Unity Hub"*. It does not. Order is `unity auth login` **then** launch the Editor | [Log 2026-08-05](#2026-08-05--a-fourth-confident-wrong-answer-a-startup-snapshot-pattern-and-a-version-audit) |
 | 4 | Windows GUI processes inherit a **snapshot of the user PATH** at launch. Claude Code started before the `unity` CLI was installed reports `Connection closed` for a healthy server, because the bare `unity` in the registration cannot resolve | [unity-mcp.md](docs/unity-mcp.md#setup) |
 | 5 | Unity does not resolve a `Packages/manifest.json` change made while it is running — `hasPipelinePackage: true`, `isReachable: false`, indefinitely | [Sequencing gotcha](#sequencing-gotcha-cost-us-two-restarts) |
-| 6 | **Claude Code snapshots its own hook configuration at session start.** A hook added to `.claude/settings.json` mid-session is not armed until a new session. Confirmed in the 2.1.222 binary: the startup path emits `setup_hooks_snapshot_ms` / `setup_hooks_captured` immediately after `setcwd` | `[source-confirmed, behaviour untested]` |
+| 6 | ~~**Claude Code snapshots its own hook configuration at session start.** A hook added to `.claude/settings.json` mid-session is not armed until a new session.~~ **Withdrawn — the behaviour is the opposite.** A hook added mid-session *does* arm, without a restart | `[withdrawn 2026-08-07, see below]` |
+
+**On withdrawn instance 6.** The claim was inferred from the 2.1.222 binary, where the startup
+path emits `setup_hooks_snapshot_ms` / `setup_hooks_captured` immediately after `setcwd`, and
+was carried as `[source-confirmed, behaviour untested]`. The behaviour has now been tested twice
+and contradicts it: session `48264c88` began at 2026-08-06T23:09:19Z, had `.claude/settings.json`
+change underneath it at 23:11Z, and took its first injection at 23:24:09Z — fifteen minutes in,
+no restart. A second observation is in the findings inbox dated 2026-08-06 17:33. Full timeline
+in [M-001-RESULT.md](docs/trials/M-001-RESULT.md#q1--did-the-hook-fire-at-all).
+
+The symbol exists; it does not mean what it was read to mean. This is the pattern's own P2 —
+a confident wrong answer from a channel that looked authoritative — and it was arrived at by
+reading source instead of running the thing. Kept rather than deleted, because the history is
+the point: **`[source-confirmed]` is not a verification tier.** An instance that has not been
+observed should say `[unverified]` and not be counted toward the three that earn a pattern.
 
 **The exception that proves the rule:** Unity's Pipeline MCP server *does* re-enumerate its
 tools when Pipeline comes up late, so a client that connected first picks up all 140 on its
