@@ -17,6 +17,7 @@ class TrialSpec:
     task_description: str
     target_arms: list[str]
     concurrency: str = "serial"
+    scene_strategy: str = "instant_reload"
     timeout_seconds: int = 300
 
 
@@ -28,13 +29,15 @@ BRIEF_TEMPLATE = """# Trial Brief — Arm {arm_id} ({arm_name})
 ## Arm Instructions & Scope
 - **Arm ID:** `{arm_id}`
 - **Arm Type:** `{arm_type}`
+- **Scene Isolation Strategy:** `{scene_strategy}`
 {arm_details}
 
 ## Execution Rules & Constraints
 1. **Tool Lock:** You MUST only use tools designated for Arm `{arm_id}`.
 2. **State Verification:** A write that does not echo the resulting state has not been verified. Read back state after mutating.
-3. **No Spillover:** Do not modify or interact with other arms' components or processes.
-4. **Log Friction:** Record every error, unexpected hang, silent failure, or unexpected behaviour verbatim.
+3. **Scene Isolation:** {scene_instructions}
+4. **No Spillover:** Do not modify or interact with other arms' components or processes.
+5. **Log Friction:** Record every error, unexpected hang, silent failure, or unexpected behaviour verbatim.
 
 ## Deliverable
 Write your complete trial report to `docs/trials/{trial_id}/arm-{arm_id}.md`.
@@ -58,13 +61,20 @@ def generate_arm_brief(trial: TrialSpec, arm: ArmConfig) -> str:
     if arm.env:
         arm_details_lines.append(f"- **Environment Vars:** `{json.dumps(arm.env)}`")
 
+    if trial.scene_strategy == "temp_scene":
+        scene_instructions = f"Work inside a dedicated temporary scene file: `Assets/Scenes/Trial_{trial.id}_Arm_{arm.id}.unity`. Duplicate baseline scene before mutating."
+    else:
+        scene_instructions = "Work in the baseline active scene. The trial runner will reset scene state (git checkout) upon trial completion."
+
     return BRIEF_TEMPLATE.format(
         trial_id=trial.id,
         arm_id=arm.id,
         arm_name=arm.name,
         arm_type=arm.type,
+        scene_strategy=trial.scene_strategy,
         task_description=trial.task_description,
         arm_details="\n".join(arm_details_lines),
+        scene_instructions=scene_instructions,
     )
 
 
@@ -81,16 +91,28 @@ def create_trial(
     config: CocktailConfig,
     arms_override: list[str] | None = None,
     exec_mode: str | None = None,
+    scene_strategy: str | None = None,
+    compare_visual: bool = False,
 ) -> dict[str, Any]:
     """Generate briefs for all targeted arms and prepare trial files."""
     trial_dir = setup_trial_directory(trial_id, config.root_dir)
 
     target_arm_ids = arms_override or [a.id for a in config.arms]
+
+    # Resolve scene strategy
+    if compare_visual or scene_strategy == "temp_scene":
+        eff_strategy = "temp_scene"
+    elif scene_strategy in ("instant_reload", "auto") or not scene_strategy:
+        eff_strategy = config.trial_defaults.scene_strategy if config.trial_defaults.scene_strategy != "auto" else "instant_reload"
+    else:
+        eff_strategy = scene_strategy
+
     trial = TrialSpec(
         id=trial_id,
         task_description=task_description,
         target_arms=target_arm_ids,
         concurrency=config.trial_defaults.concurrency,
+        scene_strategy=eff_strategy,
         timeout_seconds=config.trial_defaults.timeout_seconds,
     )
 
@@ -107,25 +129,25 @@ def create_trial(
             task_payloads.append({
                 "name": f"Trial_{trial_id}_{arm.id.replace('-', '_')}",
                 "arm": arm.id,
+                "scene_strategy": eff_strategy,
                 "task": brief,
             })
 
-    # Write trial metadata manifest & tasks payload
     meta = {
         "id": trial.id,
         "task_description": trial.task_description,
         "arms": target_arm_ids,
         "concurrency": trial.concurrency,
+        "scene_strategy": eff_strategy,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     (trial_dir / "trial-meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     (trial_dir / "trial-tasks.json").write_text(json.dumps(task_payloads, indent=2), encoding="utf-8")
 
-    result = {
+    return {
         "briefs": briefs,
         "tasks_file": str(trial_dir / "trial-tasks.json"),
         "exec_mode": exec_mode,
         "concurrency": trial.concurrency,
+        "scene_strategy": eff_strategy,
     }
-
-    return result

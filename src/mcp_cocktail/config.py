@@ -46,6 +46,7 @@ class ArmConfig:
 @dataclass
 class TrialDefaults:
     concurrency: str = "serial"  # "serial" | "parallel"
+    scene_strategy: str = "auto"  # "auto" | "instant_reload" | "temp_scene"
     timeout_seconds: int = 300
 
 
@@ -84,6 +85,7 @@ class CocktailConfig:
         td_raw = raw.get("trial_defaults", {})
         td = TrialDefaults(
             concurrency=td_raw.get("concurrency", "serial"),
+            scene_strategy=td_raw.get("scene_strategy", "auto"),
             timeout_seconds=td_raw.get("timeout_seconds", 300),
         )
 

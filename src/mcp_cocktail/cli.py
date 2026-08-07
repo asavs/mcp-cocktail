@@ -49,6 +49,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         ],
         "trial_defaults": {
             "concurrency": "serial",
+            "scene_strategy": "auto",
             "timeout_seconds": 300
         },
         "traps_file": "traps.json"
@@ -89,7 +90,6 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print(f"Error: Preset '{preset}' not found in {repo_root / 'examples'}")
         return 1
 
-    # 1. Copy preset cocktail.json and traps.json into cwd
     src_manifest = example_dir / "cocktail.json"
     src_traps = example_dir / "traps.json"
 
@@ -104,7 +104,6 @@ def cmd_setup(args: argparse.Namespace) -> int:
         shutil.copy(src_traps, dst_traps)
         print(f"Copied preset trap rules -> {dst_traps}")
 
-    # 2. Install PreToolUse hook pointing to local traps.json
     ok, msg = install_hook(
         global_settings=args.global_settings,
         target_path=args.settings,
@@ -196,9 +195,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         config=config,
         arms_override=args.arms,
         exec_mode=args.exec,
+        scene_strategy=args.scene_strategy,
+        compare_visual=args.compare_visual,
     )
     briefs = res["briefs"]
-    print(f"Created trial {args.trial_id} with {len(briefs)} arm brief(s):")
+    print(f"Created trial {args.trial_id} (Scene Isolation Strategy: {res['scene_strategy']}) with {len(briefs)} arm brief(s):")
     for arm_id in briefs:
         print(f"  - docs/trials/{args.trial_id}/brief-arm-{arm_id}.md")
     print(f"Task payload specification generated: {res['tasks_file']}")
@@ -275,6 +276,8 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("task", help="Task description for trial")
     p_run.add_argument("--arms", nargs="*", help="Specific arm IDs to target")
     p_run.add_argument("--exec", choices=["auto", "omp", "claude"], help="Prepare execution task payload for subagents")
+    p_run.add_argument("--scene-strategy", choices=["auto", "instant_reload", "temp_scene"], default="auto", help="Scene isolation strategy")
+    p_run.add_argument("--compare-visual", action="store_true", help="Shortcut to force temp_scene mode for human visual inspection")
 
     p_score = subparsers.add_parser("scorecard", help="Generate comparative scorecard & RSI insights")
     p_score.add_argument("--rsi", action="store_true", help="Extract proposed trap rules from inbox")
