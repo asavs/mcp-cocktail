@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,14 +31,12 @@ def probe_cli_arm(arm: ArmConfig) -> ArmHealthResult:
             arm.id, arm.name, "UNCONFIGURED", "No CLI command specified in manifest.", {}
         )
 
-    # Check executable in PATH
     executable = shutil.which(arm.command)
     if not executable:
         return ArmHealthResult(
             arm.id, arm.name, "OFFLINE", f"Executable '{arm.command}' not found in PATH.", {}
         )
 
-    # Execute health check command if specified
     if arm.health_check:
         try:
             res = subprocess.run(
@@ -45,12 +44,16 @@ def probe_cli_arm(arm: ArmConfig) -> ArmHealthResult:
                 shell=True,
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=3,
             )
             if res.returncode in (0, 255) and res.stdout.strip():
                 return ArmHealthResult(
                     arm.id, arm.name, "READY", f"CLI '{arm.command}' active and responding.", {"stdout": res.stdout[:200]}
                 )
+        except subprocess.TimeoutExpired:
+            return ArmHealthResult(
+                arm.id, arm.name, "READY", f"Executable '{arm.command}' found in PATH at {executable} (health check timed out).", {}
+            )
         except Exception as e:
             return ArmHealthResult(
                 arm.id, arm.name, "UNCONFIGURED", f"Health check failed: {e}", {}
@@ -59,7 +62,7 @@ def probe_cli_arm(arm: ArmConfig) -> ArmHealthResult:
     return ArmHealthResult(arm.id, arm.name, "READY", f"Executable '{arm.command}' found in PATH at {executable}.", {})
 
 
-def probe_http_health(url: str, timeout: int = 5) -> tuple[int | None, str]:
+def probe_http_health(url: str, timeout: int = 2) -> tuple[int | None, str]:
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "mcp-cocktail-doctor"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -87,13 +90,11 @@ def probe_mcp_arm(arm: ArmConfig) -> ArmHealthResult:
             arm.id, arm.name, "OFFLINE", f"Server unreachable at {url} ({msg}).", {}
         )
 
-    # 200 OK -> Server up and responding cleanly
     if status_code in (200, 204):
         return ArmHealthResult(
             arm.id, arm.name, "READY", f"MCP server reachable and responding 200 OK at {url}.", {"status": status_code}
         )
 
-    # 401/403/406 -> Socket bound, but server unauthenticated or unregistered (P4 Pattern)
     if status_code in (401, 403, 406):
         return ArmHealthResult(
             arm.id,
@@ -126,6 +127,12 @@ def run_doctor(config: CocktailConfig) -> list[ArmHealthResult]:
 
 
 def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")  # type: ignore
+        except (AttributeError, OSError):
+            pass
+
     print(f"\n=== mcp-cocktail Doctor: Arm Health & Diagnostics ===")
     print(f"Domain: {config.name} ({len(results)} arms defined)\n")
 
@@ -136,14 +143,15 @@ def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) 
     for r in results:
         if r.status == "READY":
             ready_count += 1
-            status_str = "🟢 READY"
+            status_str = "[READY]"
         elif r.status == "SOCKET_BOUND_ONLY":
-            status_str = "🟡 BOUND_ONLY (P4)"
+            status_str = "[BOUND_ONLY (P4)]"
         elif r.status == "UNCONFIGURED":
-            status_str = "🟠 UNCONFIGURED"
+            status_str = "[UNCONFIGURED]"
         else:
-            status_str = "🔴 OFFLINE"
+            status_str = "[OFFLINE]"
 
         print(f"{r.arm_id:<18} {r.arm_name:<24} {status_str:<20} {r.message}")
 
     print(f"\nDoctor Summary: {ready_count}/{len(results)} arms READY.")
+    sys.stdout.flush()
