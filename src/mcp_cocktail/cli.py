@@ -10,6 +10,11 @@ from pathlib import Path
 
 from mcp_cocktail import __version__
 from mcp_cocktail.config import CocktailConfig, TrapsConfig
+from mcp_cocktail.discover import (
+    discover_domain_arms,
+    build_discovered_manifest,
+    generate_agentic_discover_task,
+)
 from mcp_cocktail.doctor import run_doctor, print_doctor_report
 from mcp_cocktail.guardrail import run_guardrail, selftest as guardrail_selftest
 from mcp_cocktail.inbox import append_note, show_inbox
@@ -120,8 +125,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     )
     print(msg)
 
-    # Automatically run doctor to validate arm readiness honestly
-    config = CocktailConfig.load()
+    config = CocktailConfig.load(Path.cwd())
     doc_results = run_doctor(config)
     print_doctor_report(doc_results, config)
 
@@ -129,8 +133,32 @@ def cmd_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_discover(args: argparse.Namespace) -> int:
+    domain = args.domain or "unity"
+    print(f"Discovering open-source MCP servers and CLIs for domain '{domain}'...")
+
+    candidates = discover_domain_arms(domain)
+    manifest = build_discovered_manifest(domain, candidates)
+
+    target = Path.cwd() / "mcp-cocktail.json"
+    target.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    print(f"\nDiscovered {len(candidates)} candidate arm(s):")
+    for c in candidates:
+        print(f"  - [{c.type.upper()}] {c.id:<20} ({c.name})")
+
+    if args.agentic:
+        task_spec = generate_agentic_discover_task(domain)
+        task_file = Path.cwd() / f"discover-task-{domain}.json"
+        task_file.write_text(json.dumps(task_spec, indent=2), encoding="utf-8")
+        print(f"\nGenerated agentic scout task spec -> {task_file}")
+
+    print(f"\nSaved discovered manifest -> {target}")
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
-    config = CocktailConfig.load()
+    config = CocktailConfig.load(Path.cwd())
     doc_results = run_doctor(config)
     print_doctor_report(doc_results, config)
     return 0
@@ -193,7 +221,7 @@ def cmd_upstream(args: argparse.Namespace) -> int:
 
 
 def cmd_mine(args: argparse.Namespace) -> int:
-    config = CocktailConfig.load()
+    config = CocktailConfig.load(Path.cwd())
     if args.subcommand == "sweep":
         summaries = cmd_sweep(config, project_slug=args.project)
         print_sweep_report(summaries, config)
@@ -216,7 +244,7 @@ def cmd_mine(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    config = CocktailConfig.load()
+    config = CocktailConfig.load(Path.cwd())
     if not config.arms:
         print("Warning: No arms defined in manifest.")
 
@@ -238,7 +266,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_scorecard(args: argparse.Namespace) -> int:
-    config = CocktailConfig.load()
+    config = CocktailConfig.load(Path.cwd())
     out = generate_scorecard(config)
     print(out)
 
@@ -274,6 +302,10 @@ def main(argv: list[str] | None = None) -> int:
     p_setup.add_argument("--harness", default="auto", help="Target harness (claude, omp, mcp, auto)")
     p_setup.add_argument("--global", dest="global_settings", action="store_true", help="Target global settings")
     p_setup.add_argument("--settings", help="Explicit path to settings.json")
+
+    p_disc = subparsers.add_parser("discover", help="Discover open-source MCP servers and CLIs for a domain")
+    p_disc.add_argument("--domain", default="unity", help="Target software domain (e.g. unity, postgres, docker, github)")
+    p_disc.add_argument("--agentic", action="store_true", help="Generate an agentic scout task spec for deep multi-source web search")
 
     subparsers.add_parser("doctor", help="Run arm health and diagnostic probes")
 
@@ -329,6 +361,7 @@ def main(argv: list[str] | None = None) -> int:
     handler = {
         "init": cmd_init,
         "setup": cmd_setup,
+        "discover": cmd_discover,
         "doctor": cmd_doctor,
         "check": cmd_check,
         "serve": cmd_serve,
