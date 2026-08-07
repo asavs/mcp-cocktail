@@ -52,6 +52,10 @@ Include:
 
 def generate_arm_brief(trial: TrialSpec, arm: ArmConfig) -> str:
     arm_details_lines = []
+    if arm.description:
+        arm_details_lines.append(f"- **Description:** {arm.description}")
+    if arm.capabilities:
+        arm_details_lines.append(f"- **Key Capabilities:** {', '.join(arm.capabilities)}")
     if arm.command:
         arm_details_lines.append(f"- **CLI Command:** `{arm.command}`")
     if arm.mcp_server:
@@ -128,6 +132,8 @@ def create_trial(
             task_payloads.append({
                 "name": f"Trial_{trial_id}_{arm.id.replace('-', '_')}",
                 "arm": arm.id,
+                "description": arm.description,
+                "capabilities": arm.capabilities,
                 "scene_strategy": eff_strategy,
                 "task": brief,
             })
