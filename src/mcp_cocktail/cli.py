@@ -105,6 +105,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print(f"Copied preset trap rules -> {dst_traps}")
 
     ok, msg = install_hook(
+        harness=args.harness,
         global_settings=args.global_settings,
         target_path=args.settings,
         custom_traps=str(dst_traps) if dst_traps.exists() else None,
@@ -122,9 +123,14 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 def cmd_install_hook(args: argparse.Namespace) -> int:
     if args.uninstall:
-        ok, msg = uninstall_hook(global_settings=args.global_settings, target_path=args.settings)
+        ok, msg = uninstall_hook(
+            harness=args.harness,
+            global_settings=args.global_settings,
+            target_path=args.settings,
+        )
     else:
         ok, msg = install_hook(
+            harness=args.harness,
             global_settings=args.global_settings,
             target_path=args.settings,
             custom_traps=args.traps,
@@ -240,7 +246,8 @@ def main(argv: list[str] | None = None) -> int:
 
     p_setup = subparsers.add_parser("setup", help="1-Command automated setup for a target domain (e.g. unity)")
     p_setup.add_argument("--preset", default="unity", help="Domain preset name (default: unity)")
-    p_setup.add_argument("--global", dest="global_settings", action="store_true", help="Target ~/.claude/settings.json")
+    p_setup.add_argument("--harness", default="auto", help="Target harness (claude, omp, mcp, auto)")
+    p_setup.add_argument("--global", dest="global_settings", action="store_true", help="Target global settings")
     p_setup.add_argument("--settings", help="Explicit path to settings.json")
 
     p_check = subparsers.add_parser("check", help="Run PreToolUse trap guardrail check")
@@ -249,8 +256,9 @@ def main(argv: list[str] | None = None) -> int:
 
     subparsers.add_parser("serve", help="Run stdio MCP server for mcp-cocktail tools")
 
-    p_hook = subparsers.add_parser("install-hook", help="Install PreToolUse hook into .claude/settings.json")
-    p_hook.add_argument("--global", dest="global_settings", action="store_true", help="Target ~/.claude/settings.json")
+    p_hook = subparsers.add_parser("install-hook", help="Install PreToolUse hook into harness configuration")
+    p_hook.add_argument("--harness", default="auto", help="Target harness (claude, omp, mcp, auto)")
+    p_hook.add_argument("--global", dest="global_settings", action="store_true", help="Target global settings")
     p_hook.add_argument("--settings", help="Explicit path to settings.json")
     p_hook.add_argument("--traps", help="Custom traps.json path for hook")
     p_hook.add_argument("--matcher", default="Bash|PowerShell|mcp__.*", help="Tool matcher pattern")
