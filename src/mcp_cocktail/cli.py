@@ -14,6 +14,7 @@ from mcp_cocktail.discover import (
     discover_domain_arms,
     build_discovered_manifest,
     generate_agentic_discover_task,
+    merge_manifests,
 )
 from mcp_cocktail.doctor import run_doctor, print_doctor_report
 from mcp_cocktail.guardrail import run_guardrail, selftest as guardrail_selftest
@@ -138,10 +139,28 @@ def cmd_discover(args: argparse.Namespace) -> int:
     print(f"Discovering open-source MCP servers and CLIs for domain '{domain}'...")
 
     candidates = discover_domain_arms(domain)
-    manifest = build_discovered_manifest(domain, candidates)
+    discovered_manifest = build_discovered_manifest(domain, candidates)
 
-    target = Path.cwd() / "mcp-cocktail.json"
-    target.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    target_manifest = Path.cwd() / "mcp-cocktail.json"
+    docs_dir = Path.cwd() / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    discovered_doc = docs_dir / "discovered-manifest.json"
+
+    # Save discovery output for review
+    discovered_doc.write_text(json.dumps(discovered_manifest, indent=2), encoding="utf-8")
+
+    # Non-destructive merge into mcp-cocktail.json
+    if target_manifest.exists():
+        try:
+            existing_raw = json.loads(target_manifest.read_text(encoding="utf-8"))
+            final_manifest = merge_manifests(existing_raw, discovered_manifest)
+            print(f"Non-destructively merged discovered arms into existing {target_manifest.name}")
+        except Exception:
+            final_manifest = discovered_manifest
+    else:
+        final_manifest = discovered_manifest
+
+    target_manifest.write_text(json.dumps(final_manifest, indent=2), encoding="utf-8")
 
     print(f"\nDiscovered {len(candidates)} candidate arm(s):")
     for c in candidates:
@@ -153,7 +172,8 @@ def cmd_discover(args: argparse.Namespace) -> int:
         task_file.write_text(json.dumps(task_spec, indent=2), encoding="utf-8")
         print(f"\nGenerated agentic scout task spec -> {task_file}")
 
-    print(f"\nSaved discovered manifest -> {target}")
+    print(f"\nSaved discovery audit log -> {discovered_doc}")
+    print(f"Updated workspace manifest -> {target_manifest}")
     return 0
 
 

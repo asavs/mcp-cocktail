@@ -1,8 +1,8 @@
-"""Ecosystem discovery engine and agentic search for mcp-cocktail.
+"""Ecosystem discovery engine, domain filtering, and non-destructive manifest merger for mcp-cocktail.
 
 Discovers open-source community MCP servers, vendor CLIs, and API wrappers for any target
-software domain (e.g. unity, postgres, docker, github, figma) and generates candidate
-mcp-cocktail.json manifests using direct registry queries and agentic scout tasks.
+software domain (e.g. unity, postgres, docker, github, figma) and merges candidates
+non-destructively without overwriting existing hand-configured arms.
 """
 
 from __future__ import annotations
@@ -41,20 +41,27 @@ KNOWN_DOMAIN_CLIS = {
 
 
 def search_github_mcp_servers(domain: str) -> list[DiscoveredArmCandidate]:
-    """Search GitHub for public repositories matching 'mcp-server <domain>' or 'mcp <domain>'."""
+    """Search GitHub for public repositories matching 'mcp-server <domain>' with strict relevance filtering."""
     candidates = []
-    url = f"https://api.github.com/search/repositories?q=mcp-server+{domain}+in:name,description&sort=stars&order=desc"
+    domain_clean = domain.lower().strip()
+    url = f"https://api.github.com/search/repositories?q=mcp-server+{domain_clean}+in:name,description&sort=stars&order=desc"
 
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "mcp-cocktail-discover"})
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
 
-        items = data.get("items", [])[:6]
+        items = data.get("items", [])[:10]
+        domain_regex = re.compile(r"\b" + re.escape(domain_clean) + r"\b", re.I)
+
         for item in items:
             repo_name = item.get("name", "")
             full_name = item.get("full_name", "")
             desc = item.get("description", "") or ""
+
+            # Domain relevance filter: reject false positives (e.g. databricks in a unity search)
+            if not (domain_regex.search(repo_name) or domain_regex.search(desc)):
+                continue
 
             clean_id = re.sub(r"[^a-z0-9]", "-", repo_name.lower()).strip("-")
             clean_id = clean_id.removeprefix("mcp-server-").removeprefix("mcp-")
@@ -72,7 +79,7 @@ def search_github_mcp_servers(domain: str) -> list[DiscoveredArmCandidate]:
                     tool_prefix=tool_prefix,
                     package_or_repo=f"github.com/{full_name}",
                     description=desc,
-                    health_check=f"curl -s http://127.0.0.1:8080/mcp",
+                    health_check=None,  # Stdio/binary discovery - no hardcoded 8080 ports
                 )
             )
     except Exception:
@@ -132,18 +139,7 @@ def discover_domain_arms(domain: str) -> list[DiscoveredArmCandidate]:
                 mcp_server=f"{domain_clean}-mcp",
                 tool_prefix=f"mcp__{domain_clean}__",
                 description=f"Official MCP server for {domain_clean}",
-                health_check="curl -s http://127.0.0.1:8080/health",
-            )
-        )
-        candidates.append(
-            DiscoveredArmCandidate(
-                id=f"community-{domain_clean}-mcp",
-                name=f"Community {domain.capitalize()} MCP",
-                type="mcp",
-                mcp_server=f"community-{domain_clean}-mcp",
-                tool_prefix=f"mcp__community_{domain_clean}__",
-                description=f"Open-source community MCP server for {domain_clean}",
-                health_check="curl -s http://127.0.0.1:8081/mcp",
+                health_check=None,
             )
         )
 
@@ -181,3 +177,21 @@ def build_discovered_manifest(domain: str, candidates: list[DiscoveredArmCandida
         },
         "traps_file": "traps.json",
     }
+
+
+def merge_manifests(existing_raw: dict[str, Any], discovered_raw: dict[str, Any]) -> dict[str, Any]:
+    """Non-destructively merge discovered arms into existing manifest. Preserves all hand-configured arms."""
+    merged = dict(existing_raw)
+    existing_arms = merged.get("arms", [])
+    existing_ids = {a.get("id") for a in existing_arms if isinstance(a, dict)}
+
+    discovered_arms = discovered_raw.get("arms", [])
+    new_arms_added = []
+
+    for d_arm in discovered_arms:
+        if isinstance(d_arm, dict) and d_arm.get("id") not in existing_ids:
+            existing_arms.append(d_arm)
+            new_arms_added.append(d_arm.get("id"))
+
+    merged["arms"] = existing_arms
+    return merged
