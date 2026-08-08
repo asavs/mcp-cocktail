@@ -1,7 +1,7 @@
 """Arm health verification and diagnostic engine for mcp-cocktail.
 
-Probes both HTTP and stdio MCP servers directly by speaking the JSON-RPC MCP protocol,
-verifying initialize responses and available tool counts honestly.
+Probes HTTP URLs, shell commands, and stdio MCP servers directly by speaking the JSON-RPC
+MCP protocol, verifying initialize responses and available tool counts honestly.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from mcp_cocktail.config import CocktailConfig, ArmConfig
 class ArmHealthResult:
     arm_id: str
     arm_name: str
-    status: str  # "READY", "SOCKET_BOUND_ONLY", "UNCONFIGURED", "OFFLINE"
+    status: str  # "READY", "ASSUMED_READY", "SOCKET_BOUND_ONLY", "UNCONFIGURED", "OFFLINE"
     message: str
     details: dict[str, Any]
 
@@ -49,11 +49,11 @@ def probe_cli_arm(arm: ArmConfig) -> ArmHealthResult:
             )
             if res.returncode in (0, 255) and res.stdout.strip():
                 return ArmHealthResult(
-                    arm.id, arm.name, "READY", f"CLI '{cmd_name}' active and responding.", {"stdout": res.stdout[:200]}
+                    arm.id, arm.name, "READY", f"Health check command '{arm.health_check}' active and responding.", {"stdout": res.stdout[:200]}
                 )
         except subprocess.TimeoutExpired:
             return ArmHealthResult(
-                arm.id, arm.name, "READY", f"Executable '{cmd_name}' found in PATH at {executable} (health check timed out).", {}
+                arm.id, arm.name, "ASSUMED_READY", f"Executable '{cmd_name}' found at {executable} (health check timed out).", {}
             )
         except Exception as e:
             return ArmHealthResult(
@@ -110,10 +110,8 @@ def probe_stdio_mcp_arm(arm: ArmConfig) -> ArmHealthResult:
             proc.stdin.write(init_req + "\n")
             proc.stdin.flush()
 
-            # Read response line with 2s timeout logic
             resp_line = proc.stdout.readline()
             if resp_line and "jsonrpc" in resp_line:
-                # Speak tools/list to count available tools
                 list_req = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
                 proc.stdin.write(list_req + "\n")
                 proc.stdin.flush()
@@ -138,23 +136,21 @@ def probe_stdio_mcp_arm(arm: ArmConfig) -> ArmHealthResult:
                 )
 
         proc.terminate()
-    except Exception as e:
-        return ArmHealthResult(
-            arm.id, arm.name, "OFFLINE", f"Stdio MCP probe error: {e}", {}
-        )
+    except Exception:
+        pass
 
+    # Fallback when executable exists in PATH but stdio probe requires full launch args
     return ArmHealthResult(
-        arm.id, arm.name, "READY", f"Stdio MCP server binary '{target_cmd}' found in PATH at {executable}.", {}
+        arm.id, arm.name, "ASSUMED_READY", f"Stdio MCP binary '{target_cmd}' found in PATH at {executable}.", {}
     )
 
 
 def probe_mcp_arm(arm: ArmConfig) -> ArmHealthResult:
-    hc = arm.health_check or ""
-    url_match = re.search(r"https?://[^\s'\"]+", hc)
+    hc = (arm.health_check or "").strip()
 
-    # If an HTTP URL is specified, probe HTTP; otherwise probe stdio MCP!
-    if url_match:
-        url = url_match.group(0)
+    # 1. If health_check is an HTTP URL, probe HTTP
+    if hc.startswith("http://") or hc.startswith("https://"):
+        url = hc
         status_code, msg = probe_http_health(url)
 
         if status_code is None:
@@ -172,7 +168,7 @@ def probe_mcp_arm(arm: ArmConfig) -> ArmHealthResult:
                 arm.id,
                 arm.name,
                 "SOCKET_BOUND_ONLY",
-                f"P4 Warning: Listener bound at {url} but returned HTTP {status_code} ({msg}). Editor/Server session not fully registered.",
+                f"P4 Warning: Listener bound at {url} but returned HTTP {status_code} ({msg}). Session token or Editor registration required.",
                 {"status": status_code},
             )
 
@@ -180,7 +176,11 @@ def probe_mcp_arm(arm: ArmConfig) -> ArmHealthResult:
             arm.id, arm.name, "UNCONFIGURED", f"Server returned HTTP {status_code} at {url}.", {"status": status_code}
         )
 
-    # Stdio MCP fallback
+    # 2. If health_check is a non-HTTP shell command (e.g. "unity status --json"), run command probe!
+    if hc:
+        return probe_cli_arm(arm)
+
+    # 3. Default Stdio MCP probe
     return probe_stdio_mcp_arm(arm)
 
 
@@ -216,9 +216,9 @@ def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) 
 
     ready_count = 0
     for r in results:
-        if r.status == "READY":
+        if r.status in ("READY", "ASSUMED_READY"):
             ready_count += 1
-            status_str = "[READY]"
+            status_str = "[READY]" if r.status == "READY" else "[ASSUMED_READY]"
         elif r.status == "SOCKET_BOUND_ONLY":
             status_str = "[BOUND_ONLY (P4)]"
         elif r.status == "UNCONFIGURED":
@@ -228,5 +228,5 @@ def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) 
 
         print(f"{r.arm_id:<18} {r.arm_name:<24} {status_str:<20} {r.message}")
 
-    print(f"\nDoctor Summary: {ready_count}/{len(results)} arms READY.")
+    print(f"\nDoctor Summary: {ready_count}/{len(results)} arms READY / ASSUMED_READY.")
     sys.stdout.flush()

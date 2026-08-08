@@ -19,7 +19,7 @@
       "type": "mcp",
       "mcp_server": "unity-editor-mcp",
       "tool_prefix": "mcp__unity-editor-mcp__",
-      "health_check": "curl -s http://127.0.0.1:7800/health"
+      "health_check": "unity status --json"
     },
     {
       "id": "coplay-mcp",

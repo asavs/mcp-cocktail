@@ -139,7 +139,7 @@ def generate_upstream_bug_draft(
     arm_name: str,
     root_dir: Path | str | None = None,
 ) -> Path:
-    """Exhaust 4: Generate a structured upstream bug report draft for vendor bug trackers."""
+    """Exhaust 4: Generate a clean upstream bug report draft for vendor bug trackers."""
     root = Path(root_dir) if root_dir else Path.cwd()
     upstream_dir = root / "docs" / "upstream"
     upstream_dir.mkdir(parents=True, exist_ok=True)
@@ -155,26 +155,18 @@ def generate_upstream_bug_draft(
 **Date Identified:** {date_str}
 **Status:** Draft for Upstream Submission `[feedback]`
 
-## Summary
+## Summary & Impact
 {observation}
 
 ## Observed Behavior
-Executing the tool payload produces an inconsistent or unhandled result:
-- The command returns success or non-zero status unexpectedly.
-- State mutation is silently dropped or argument parsing ignores positional parameters.
+Invocations executed against `{arm_name}` produced an inconsistent or unhandled result as described above.
 
-## Reproduction Steps
-1. Invocations executed against `{arm_name}`.
-2. Tool call payload:
-   ```json
-   {{
-     "observation": "{observation}"
-   }}
-   ```
-3. Read-back verification failed or state was left at default.
+## Reproduction Context
+- **Tool Arm:** `{arm_name}`
+- **Date:** {date_str}
 
 ## Expected Behavior
-The tool should validate parameters strictly or echo modified state upon completion.
+The tool should operate predictably without unhandled errors, deadlocks, or misreported status.
 """
     file_path.write_text(content, encoding="utf-8")
     return file_path
