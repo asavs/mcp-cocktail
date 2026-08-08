@@ -105,8 +105,14 @@ def cmd_setup(args: argparse.Namespace) -> int:
     agents_dir = Path.cwd() / ".agents"
     agents_dir.mkdir(parents=True, exist_ok=True)
 
-    src_manifest = example_dir / "cocktail.json"
-    src_traps = example_dir / "traps.json"
+    src_manifest = example_dir / ".agents" / "manifest.json"
+    if not src_manifest.exists():
+        src_manifest = example_dir / "cocktail.json"
+
+    src_traps = example_dir / ".agents" / "traps.json"
+    if not src_traps.exists():
+        src_traps = example_dir / "traps.json"
+
     src_tools = example_dir / "tools"
 
     dst_manifest = agents_dir / "manifest.json"
