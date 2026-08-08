@@ -15,11 +15,11 @@ When software vendors take months or years to release official Model Context Pro
 ## ⚡ Quickstart (30 Seconds)
 
 ```bash
-# 1. Install mcp-cocktail
+# 1. Install mcp-cocktail globally or in editable mode
 pip install -e .
 
-# 2. Install PreToolUse Hook into your project's .claude/settings.json
-mcp-cocktail install-hook
+# 2. One-Command Setup & Doctor Health Check for your domain (e.g. unity)
+mcp-cocktail setup --preset unity
 
 # 3. Test Guardrail Execution (< 5ms interception)
 mcp-cocktail check --selftest
@@ -29,42 +29,70 @@ mcp-cocktail check --selftest
 
 ## 📖 Progressive Walkthrough
 
-### 1. Initialize Workspace Manifest
-Create a workspace config (`mcp-cocktail.json`) and trap rules (`traps.json`) in any repository:
+### 1. Initialize or Discover Workspace Manifests
+Create a workspace config (`mcp-cocktail.json`) manually or auto-discover candidate MCPs and CLIs from GitHub and registries:
 
 ```bash
-mcp-cocktail init --name my-ecosystem
+# Auto-discover open-source MCPs & CLIs for a domain (non-destructive merge)
+mcp-cocktail discover --domain postgres
+
+# Generate an agentic scout subagent task for deep web discovery
+mcp-cocktail discover --domain unity --agentic
 ```
 
 `mcp-cocktail.json` structure:
 ```json
 {
-  "name": "database-ecosystem",
-  "description": "Multi-arm evaluation for SQL CLIs and MCP servers",
+  "name": "unity-ecosystem",
+  "description": "Multi-arm evaluation manifest for Unity CLI and MCP servers",
   "arms": [
     {
-      "id": "arm-cli",
-      "name": "Official CLI",
+      "id": "unity-cli",
+      "name": "Official Unity CLI",
       "type": "cli",
-      "command": "psql"
+      "command": "unity",
+      "health_check": "unity status --json"
     },
     {
-      "id": "arm-mcp",
-      "name": "Community MCP",
+      "id": "official-mcp",
+      "name": "Official Unity MCP",
       "type": "mcp",
-      "mcp_server": "postgres-mcp",
-      "tool_prefix": "mcp__postgres__"
+      "mcp_server": "unity-editor-mcp",
+      "tool_prefix": "mcp__unity-editor-mcp__",
+      "health_check": "unity status --json"
+    },
+    {
+      "id": "coplay-mcp",
+      "name": "CoplayDev Unity MCP",
+      "type": "mcp",
+      "mcp_server": "UnityMCP",
+      "tool_prefix": "mcp__UnityMCP__",
+      "setup_script": "tools/three-way-setup.sh"
     }
   ],
   "trial_defaults": {
     "concurrency": "serial",
+    "scene_strategy": "auto",
     "timeout_seconds": 300
   }
 }
 ```
 
-### 2. Native MCP Server Interface (`mcp-cocktail serve`)
-Mount `mcp-cocktail` directly into your agent's MCP config (`.claude/settings.json` or `mcp.json`) to expose native tools directly in its palette:
+### 2. Validate Arm Health (`mcp-cocktail doctor`)
+Probe CLI binary PATHs, stdio MCP `initialize` capabilities, and HTTP endpoints to report an honest status summary:
+
+```bash
+mcp-cocktail doctor
+```
+
+Reports:
+- 🟢 `[READY]` (CLI active or stdio MCP server initialized with tool count)
+- 🟡 `[BOUND_ONLY (P4)]` (Socket bound but session unauthenticated / unregistered)
+- 🟠 `[UNCONFIGURED]` (Setup script missing or parameter unconfigured)
+- 🔴 `[OFFLINE]` (Process or port unreachable)
+
+### 3. Native MCP Server Interface (`mcp-cocktail serve`) & Transparent Proxy (`mcp-cocktail proxy`)
+Mount `mcp-cocktail` directly into your agent's MCP config (`.claude/settings.json` or `mcp.json`) to expose native tools or wrap target MCP servers:
 
 ```json
 {
@@ -72,6 +100,10 @@ Mount `mcp-cocktail` directly into your agent's MCP config (`.claude/settings.js
     "mcp-cocktail": {
       "command": "mcp-cocktail",
       "args": ["serve"]
+    },
+    "unity-editor-mcp": {
+      "command": "mcp-cocktail",
+      "args": ["proxy", "--", "unity-editor-mcp"]
     }
   }
 }
@@ -83,20 +115,24 @@ Exposes:
 - `mcp__mcp-cocktail-server__get_scorecard`
 - `mcp__mcp-cocktail-server__run_trial`
 
-### 3. Generate Multi-Arm Trial Briefs
+### 4. Generate Multi-Arm Trial Briefs & Subagent Payloads
 Create standardized briefs and subagent task payloads for subagents to execute the same task independently across defined arms:
 
 ```bash
-mcp-cocktail run T-001 "Build a normalized user schema and query user stats" --exec auto
+# Standard serial trial run (< 1s instant baseline scene reload)
+mcp-cocktail run T-001 "Build scene hierarchy for vehicle physics" --exec auto
+
+# Visual comparison mode (leaves temporary scene files for human Unity Editor review)
+mcp-cocktail run T-001 "Build scene hierarchy" --compare-visual
 ```
 
 Generates:
-- `docs/trials/T-001/brief-arm-arm-cli.md`
-- `docs/trials/T-001/brief-arm-arm-mcp.md`
+- `docs/trials/T-001/brief-unity-cli.md`
+- `docs/trials/T-001/brief-official-mcp.md`
 - `docs/trials/T-001/trial-meta.json`
 - `docs/trials/T-001/trial-tasks.json`
 
-### 4. Log Friction & Mine Transcripts
+### 5. Log Friction & Mine Transcripts for P1-P5 Patterns
 Subagents or humans can capture friction observations mid-task:
 
 ```bash
@@ -146,7 +182,7 @@ mcp-cocktail scorecard --rsi
 
 ```
 my-project/
-├── mcp-cocktail.json              # 1. Manifest: Arms, health checks, CLI commands
+├── mcp-cocktail.json              # 1. Manifest: Arms, health checks, CLI commands, capabilities
 ├── traps.json                     # 2. Rule Store: Active PreToolUse trap rules & matchers
 ├── .claude/
 │   └── settings.json              # 3. Client Config: PreToolUse hook pointing to mcp-cocktail check
@@ -156,8 +192,8 @@ my-project/
     ├── upstream/                  # 6. Upstream Vendor Bug Reports: Feedback drafts for official tools
     └── trials/                    # 7. Benchmark Data Store: Trial briefs, meta, tasks, and reports
         └── T-001/
-            ├── brief-arm-a.md
-            ├── arm-a.md
+            ├── brief-unity-cli.md
+            ├── unity-cli.md
             ├── trial-meta.json
             └── trial-tasks.json
 ```
@@ -167,7 +203,7 @@ my-project/
 ## 🎮 Reference Datasets
 
 See `examples/unity/` for a complete reference dataset containing:
-- Multi-arm evaluation manifest (`examples/unity/cocktail.json`)
+- Multi-arm evaluation manifest (`examples/unity/cocktail.json`) with 11 curated arms
 - Comprehensive Unity trap rule store (`examples/unity/traps.json`)
 - Historic trial reports and scorecard (`examples/unity/docs/trials/`)
 - Historical research log (`examples/unity/UNITY-TOOLING-NOTES.md`)
