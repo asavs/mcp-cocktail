@@ -2,7 +2,7 @@
 
 Detects the specific active agent harness running right now (Claude, OMP, MCP)
 and configures ONLY the active harness without creating unused configuration
-directories or polluting the workspace.
+directories or polluting the workspace. Uses .agents/ as canonical source.
 """
 
 from __future__ import annotations
@@ -128,6 +128,8 @@ def install_hook_for_harness(
     command_str = DEFAULT_HOOK_COMMAND
     if custom_traps:
         command_str += f" --traps \"{custom_traps}\""
+    elif (Path.cwd() / ".agents" / "traps.json").exists():
+        command_str += ' --traps ".agents/traps.json"'
 
     target_hook_obj = {
         "type": "command",

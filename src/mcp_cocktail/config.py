@@ -72,11 +72,24 @@ class CocktailConfig:
     def load(cls, path_or_dir: str | Path | None = None) -> CocktailConfig:
         target = Path(path_or_dir) if path_or_dir else Path.cwd()
         if target.is_dir():
+            candidates = [
+                target / ".agents" / "manifest.json",
+                target / ".agents" / "mcp-cocktail.json",
+                target / ".agents" / "cocktail.json",
+                target / "mcp-cocktail.json",
+                target / "cocktail.json",
+            ]
             config_file = target / "mcp-cocktail.json"
-            if not config_file.exists():
-                config_file = target / "cocktail.json"
+            for c in candidates:
+                if c.exists():
+                    config_file = c
+                    break
+            ws_root = target.resolve()
         else:
             config_file = target
+            ws_root = target.parent.resolve()
+            if ws_root.name == ".agents":
+                ws_root = ws_root.parent
 
         if not config_file.exists():
             return cls(
@@ -84,7 +97,7 @@ class CocktailConfig:
                 description="Default configuration",
                 arms=[],
                 trial_defaults=TrialDefaults(),
-                root_dir=config_file.parent.resolve(),
+                root_dir=ws_root,
             )
 
         with open(config_file, "r", encoding="utf-8") as f:
@@ -104,7 +117,7 @@ class CocktailConfig:
             arms=arms,
             trial_defaults=td,
             traps_file=raw.get("traps_file", "traps.json"),
-            root_dir=config_file.parent.resolve(),
+            root_dir=ws_root,
         )
 
 
@@ -143,7 +156,15 @@ class TrapsConfig:
     def load(cls, path_or_dir: str | Path | None = None) -> TrapsConfig:
         target = Path(path_or_dir) if path_or_dir else Path.cwd()
         if target.is_dir():
+            candidates = [
+                target / ".agents" / "traps.json",
+                target / "traps.json",
+            ]
             file_path = target / "traps.json"
+            for c in candidates:
+                if c.exists():
+                    file_path = c
+                    break
         else:
             file_path = target
 

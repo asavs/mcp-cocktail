@@ -25,10 +25,14 @@ from mcp_cocktail.proxy import run_proxy
 from mcp_cocktail.runner import create_trial
 from mcp_cocktail.scorecard import generate_scorecard, propose_rsi_guardrails, generate_upstream_bug_draft
 from mcp_cocktail.server import run_mcp_server
+from mcp_cocktail.sync import pull_domain_rules, push_domain_contributions
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    target = Path.cwd() / "mcp-cocktail.json"
+    agents_dir = Path.cwd() / ".agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+
+    target = agents_dir / "manifest.json"
     if target.exists() and not args.force:
         print(f"Error: {target} already exists. Use --force to overwrite.")
         return 1
@@ -79,7 +83,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     }
 
     target.write_text(json.dumps(sample_manifest, indent=2), encoding="utf-8")
-    traps_target = Path.cwd() / "traps.json"
+    traps_target = agents_dir / "traps.json"
     if not traps_target.exists():
         traps_target.write_text(json.dumps(sample_traps, indent=2), encoding="utf-8")
 
@@ -98,12 +102,15 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print(f"Error: Preset '{preset}' not found in {repo_root / 'examples'}")
         return 1
 
+    agents_dir = Path.cwd() / ".agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+
     src_manifest = example_dir / "cocktail.json"
     src_traps = example_dir / "traps.json"
     src_tools = example_dir / "tools"
 
-    dst_manifest = Path.cwd() / "mcp-cocktail.json"
-    dst_traps = Path.cwd() / "traps.json"
+    dst_manifest = agents_dir / "manifest.json"
+    dst_traps = agents_dir / "traps.json"
     dst_tools = Path.cwd() / "tools"
 
     if src_manifest.exists():
@@ -141,15 +148,16 @@ def cmd_discover(args: argparse.Namespace) -> int:
     candidates = discover_domain_arms(domain)
     discovered_manifest = build_discovered_manifest(domain, candidates)
 
-    target_manifest = Path.cwd() / "mcp-cocktail.json"
+    agents_dir = Path.cwd() / ".agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    target_manifest = agents_dir / "manifest.json"
+
     docs_dir = Path.cwd() / "docs"
     docs_dir.mkdir(parents=True, exist_ok=True)
     discovered_doc = docs_dir / "discovered-manifest.json"
 
-    # Save discovery output for review
     discovered_doc.write_text(json.dumps(discovered_manifest, indent=2), encoding="utf-8")
 
-    # Non-destructive merge into mcp-cocktail.json
     if target_manifest.exists():
         try:
             existing_raw = json.loads(target_manifest.read_text(encoding="utf-8"))
@@ -175,6 +183,16 @@ def cmd_discover(args: argparse.Namespace) -> int:
     print(f"\nSaved discovery audit log -> {discovered_doc}")
     print(f"Updated workspace manifest -> {target_manifest}")
     return 0
+
+
+def cmd_sync(args: argparse.Namespace) -> int:
+    domain = args.domain or "unity"
+    if args.push:
+        ok, msg = push_domain_contributions(domain)
+    else:  # Default pull
+        ok, msg = pull_domain_rules(domain)
+    print(msg)
+    return 0 if ok else 1
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -327,6 +345,11 @@ def main(argv: list[str] | None = None) -> int:
     p_disc.add_argument("--domain", default="unity", help="Target software domain (e.g. unity, postgres, docker, github)")
     p_disc.add_argument("--agentic", action="store_true", help="Generate an agentic scout task spec for deep multi-source web search")
 
+    p_sync = subparsers.add_parser("sync", help="Sync domain weakness guardrails with the global community registry")
+    p_sync.add_argument("--domain", default="unity", help="Target software domain (e.g. unity, postgres, docker)")
+    p_sync.add_argument("--pull", action="store_true", help="Pull latest community guardrails (default)")
+    p_sync.add_argument("--push", action="store_true", help="Package locally derived weakness rules for upstream PR submission")
+
     subparsers.add_parser("doctor", help="Run arm health and diagnostic probes")
 
     p_check = subparsers.add_parser("check", help="Run PreToolUse trap guardrail check")
@@ -382,6 +405,7 @@ def main(argv: list[str] | None = None) -> int:
         "init": cmd_init,
         "setup": cmd_setup,
         "discover": cmd_discover,
+        "sync": cmd_sync,
         "doctor": cmd_doctor,
         "check": cmd_check,
         "serve": cmd_serve,
