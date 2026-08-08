@@ -15,15 +15,32 @@ When software vendors take months or years to release official Model Context Pro
 ## ⚡ Quickstart (30 Seconds)
 
 ```bash
-# 1. Install mcp-cocktail globally or in editable mode
+# 1. Install mcp-cocktail
 pip install -e .
 
-# 2. One-Command Setup & Doctor Health Check for your domain (e.g. unity)
+# 2. Automated Setup & Doctor Health Check for your domain (e.g. unity)
 mcp-cocktail setup --preset unity
 
 # 3. Test Guardrail Execution (< 5ms interception)
 mcp-cocktail check --selftest
 ```
+
+---
+
+## 🤝 Zero-Friction Collaborator Setup (Committing Rules to Git)
+
+By committing `mcp-cocktail.json`, `traps.json`, and harness configuration files (`.claude/settings.json`, `.omp/settings.json`, `mcp.json`) directly to your project's Git repository, **every teammate and AI agent on your team inherits the guardrails automatically**:
+
+```bash
+# Inside your project repo:
+git add mcp-cocktail.json traps.json .claude/ .omp/ docs/
+git commit -m "chore: add mcp-cocktail guardrails and tool manifest"
+git push
+```
+
+When a collaborator clones or pulls the repository:
+- Their agent harness (Claude Code, Oh My Pi, Cursor, VS Code) automatically detects the guardrails and configuration files on startup.
+- Teammates enjoy real-time trap shielding without needing any manual setup!
 
 ---
 
