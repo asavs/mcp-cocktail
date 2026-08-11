@@ -1,12 +1,14 @@
 """Tests for mcp_cocktail.doctor module."""
 
 import json
+import sys
 from pathlib import Path
 
 from mcp_cocktail.config import CocktailConfig, ArmConfig
 from mcp_cocktail.doctor import (
     check_arm_binding,
     extract_json_path,
+    first_command_token,
     doctor_check_arm,
     run_doctor,
     probe_cli_arm,
@@ -83,6 +85,31 @@ def test_probe_binary_comes_from_the_health_check_not_the_arm_identity():
     http_arm = ArmConfig(id="coplay-mcp", name="Coplay", type="mcp", mcp_server="UnityMCP",
                          health_check="http://127.0.0.1:8080/mcp")
     assert resolve_probe_binary(http_arm) == "UnityMCP"
+
+
+def test_probe_binary_honours_quoted_paths():
+    """Field log V2: whitespace splitting truncated
+    `"C:\\Program Files\\Python313\\python.exe"` at the space and probed for
+    `C:\\Program`, reporting OFFLINE with a misleading reason. On Windows a
+    quoted absolute path is the norm, not an edge case."""
+    assert first_command_token(r'"C:\Program Files\Python313\python.exe" -c "pass"') == \
+        r"C:\Program Files\Python313\python.exe"
+    assert first_command_token("'/usr/local/bin/my tool' --check") == "/usr/local/bin/my tool"
+
+    # posix=False is load-bearing: posix=True would return C:Toolsunity.exe.
+    assert first_command_token(r"C:\Tools\unity.exe --version") == r"C:\Tools\unity.exe"
+
+    assert first_command_token("unity status --json") == "unity"
+    # Unbalanced quotes must degrade, not raise.
+    assert first_command_token('unity status --json "unterminated') == "unity"
+    assert first_command_token("") == ""
+
+
+def test_quoted_health_check_arm_probes_the_real_interpreter():
+    arm = ArmConfig(id="quoted-hc", name="Quoted", type="cli", command="python",
+                    health_check=f'"{sys.executable}" -c "pass"')
+    res = probe_cli_arm(arm)
+    assert res.status == "READY", res.message
 
 
 UNITY_STATUS = json.dumps({

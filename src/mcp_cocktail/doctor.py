@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -93,6 +94,23 @@ def check_arm_binding(arm: ArmConfig, stdout: str, workspace_root: Path | None) 
     )
 
 
+def first_command_token(command: str) -> str:
+    """Extract the executable from a shell command, honouring quotes.
+
+    Splitting on whitespace truncates `"C:\\Program Files\\..."` at the space
+    and probes for a binary named `C:\\Program`, which reports OFFLINE with a
+    misleading reason. posix=False is deliberate: posix=True strips the
+    backslashes out of unquoted Windows paths, turning `C:\\Tools\\unity.exe`
+    into `C:Toolsunity.exe`.
+    """
+    try:
+        tokens = shlex.split(command, posix=False)
+    except ValueError:  # unbalanced quotes; salvage what we can
+        tokens = command.split()
+
+    return tokens[0].strip("\"'") if tokens else ""
+
+
 def resolve_probe_binary(arm: ArmConfig) -> str:
     """Name the executable a PATH probe should look for.
 
@@ -104,7 +122,7 @@ def resolve_probe_binary(arm: ArmConfig) -> str:
     """
     hc = (arm.health_check or "").strip()
     if hc and not hc.startswith(("http://", "https://")):
-        first_token = hc.split()[0].strip("\"'")
+        first_token = first_command_token(hc)
         if first_token:
             return first_token
 
