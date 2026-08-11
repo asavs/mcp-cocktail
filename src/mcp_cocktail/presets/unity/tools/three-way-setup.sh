@@ -187,10 +187,17 @@ if [ "$MODE" != "stop" ]; then
     echo "        is set BEFORE the Editor loads. Nothing else sets it — starting the"
     echo "        server does not, because that path never touches Bridge/TransportManager."
     echo
-    echo "        Do NOT call MCPServiceLocator.Bridge.StartAsync() from eval to force it."
-    echo "        eval runs on the Editor's main thread and that call awaits without"
-    echo "        ConfigureAwait(false); blocking on it deadlocks the Editor with no"
-    echo "        recovery short of killing the process. Task.Run does not help."
+    if [ "$MODE" = "start" ]; then
+      echo "        Bridge.StartAsync() was already dispatched above, fire-and-forget, and"
+      echo "        registration still did not appear. Use the Connect button."
+    else
+      echo "        Re-run in start mode to dispatch Bridge.StartAsync(), or use the button."
+    fi
+    echo "        Either way, never *block* on that task — .GetAwaiter().GetResult() and"
+    echo "        any await deadlock the Editor permanently: eval runs on the main thread"
+    echo "        and StartAsync awaits without ConfigureAwait(false), so the continuation"
+    echo "        waits for the thread that is blocked. Task.Run does not help. Recovery"
+    echo "        is killing the process. Dispatch and discard, as above."
     fail=1
   fi
 fi
