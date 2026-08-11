@@ -16,6 +16,7 @@ from typing import Any
 
 from mcp_cocktail.config import TrapsConfig
 from mcp_cocktail.guardrail import evaluate_rules, load_state, save_state, get_state_path
+from mcp_cocktail.console import ensure_utf8_streams
 
 
 def process_jsonrpc_message(
@@ -79,11 +80,7 @@ def run_proxy(target_cmd: list[str]) -> int:
         return 1
 
     # Ensure UTF-8 streams
-    for stream in (sys.stdout, sys.stdin, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8")  # type: ignore
-        except (AttributeError, OSError):
-            pass
+    ensure_utf8_streams()
 
     traps = TrapsConfig.load()
     session_id = "proxy_session"

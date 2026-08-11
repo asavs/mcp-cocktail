@@ -21,6 +21,7 @@ from mcp_cocktail.inbox import append_note
 from mcp_cocktail.runner import create_trial
 from mcp_cocktail.scorecard import generate_scorecard
 from mcp_cocktail.weakness import derive_weakest_rule
+from mcp_cocktail.console import ensure_utf8_streams
 
 
 TOOLS_MANIFEST = [
@@ -173,11 +174,7 @@ def handle_rpc_request(request: dict[str, Any]) -> dict[str, Any] | None:
 
 def run_mcp_server() -> int:
     """Stdio JSON-RPC server loop."""
-    for stream in (sys.stdout, sys.stdin):
-        try:
-            stream.reconfigure(encoding="utf-8")  # type: ignore
-        except (AttributeError, OSError):
-            pass
+    ensure_utf8_streams()
 
     for line in sys.stdin:
         line = line.strip()

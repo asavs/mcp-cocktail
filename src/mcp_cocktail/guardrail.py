@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp_cocktail.config import TrapRule, TrapsConfig, resolve_traps_path
+from mcp_cocktail.console import ensure_utf8_streams
 
 # Reserved state key; rule ids never collide because they are matched literally.
 NO_STORE_WARNED = "__mcp_cocktail_no_rule_store_warned__"
@@ -253,11 +254,7 @@ def save_state(path: Path, state: dict[str, float]) -> None:
 
 def run_guardrail(traps_path: Path | str | None = None) -> int:
     """PreToolUse hook main execution entrypoint."""
-    for stream in (sys.stdout, sys.stdin):
-        try:
-            stream.reconfigure(encoding="utf-8")  # type: ignore
-        except (AttributeError, OSError):
-            pass
+    ensure_utf8_streams()
 
     try:
         raw_in = sys.stdin.read()
@@ -305,6 +302,10 @@ def selftest(traps_path: Path | str | None = None) -> int:
     collaborator who inherits a configured hook, a passing selftest, and an
     empty workspace has zero protection and no signal that anything is wrong.
     """
+    # A separate entrypoint from run_guardrail, and the WARNING below is exactly
+    # the line that must not vanish on a cp437 console.
+    ensure_utf8_streams()
+
     test_rules = TrapsConfig(
         version="1.0",
         domain="test",

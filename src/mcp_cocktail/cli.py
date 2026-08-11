@@ -10,6 +10,7 @@ from pathlib import Path
 
 from mcp_cocktail import __version__
 from mcp_cocktail.config import CocktailConfig, TrapsConfig
+from mcp_cocktail.console import ensure_utf8_streams
 from mcp_cocktail.discover import (
     discover_domain_arms,
     build_discovered_manifest,
@@ -412,6 +413,10 @@ def main(argv: list[str] | None = None) -> int:
     p_score.add_argument("--rsi", action="store_true", help="Extract proposed trap rules from inbox")
 
     args = parser.parse_args(argv)
+
+    # Covers every subcommand's output in one place, including paths that print
+    # non-ASCII without going through doctor's or the guardrail's entrypoint.
+    ensure_utf8_streams()
 
     if not args.command:
         parser.print_help()

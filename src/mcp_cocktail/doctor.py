@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp_cocktail.config import CocktailConfig, ArmConfig
+from mcp_cocktail.console import ensure_utf8_streams
 
 
 @dataclass
@@ -337,11 +338,7 @@ def run_doctor(config: CocktailConfig) -> list[ArmHealthResult]:
 
 
 def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) -> None:
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8")  # type: ignore
-        except (AttributeError, OSError):
-            pass
+    ensure_utf8_streams()
 
     print(f"\n=== mcp-cocktail Doctor: Arm Health & Diagnostics ===")
     print(f"Domain: {config.name} ({len(results)} arms defined)\n")
