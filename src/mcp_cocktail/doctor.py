@@ -29,8 +29,26 @@ class ArmHealthResult:
     details: dict[str, Any]
 
 
+def resolve_probe_binary(arm: ArmConfig) -> str:
+    """Name the executable a PATH probe should look for.
+
+    An arm's identity fields are not reliably binaries: `mcp_server` is a
+    harness registry key and `id` is a label, so resolving either strands
+    every MCP arm on a lookup that cannot succeed. When the arm declares a
+    shell health_check, that command's first token is the binary actually
+    about to run -- probe for that instead.
+    """
+    hc = (arm.health_check or "").strip()
+    if hc and not hc.startswith(("http://", "https://")):
+        first_token = hc.split()[0].strip("\"'")
+        if first_token:
+            return first_token
+
+    return arm.command or arm.mcp_server or arm.id
+
+
 def probe_cli_arm(arm: ArmConfig) -> ArmHealthResult:
-    cmd_name = arm.command or arm.mcp_server or arm.id
+    cmd_name = resolve_probe_binary(arm)
     executable = shutil.which(cmd_name)
 
     if not executable:
@@ -47,10 +65,22 @@ def probe_cli_arm(arm: ArmConfig) -> ArmHealthResult:
                 text=True,
                 timeout=3,
             )
-            if res.returncode in (0, 255) and res.stdout.strip():
+            if res.returncode in (0, 255):
                 return ArmHealthResult(
                     arm.id, arm.name, "READY", f"Health check command '{arm.health_check}' active and responding.", {"stdout": res.stdout[:200]}
                 )
+
+            # A health check that ran and failed is a verdict, not a missing
+            # verdict. Falling through to "executable found in PATH" would
+            # green-light a dead arm on the strength of its binary existing.
+            detail = (res.stderr.strip() or res.stdout.strip() or "no output").splitlines()[0][:120]
+            return ArmHealthResult(
+                arm.id,
+                arm.name,
+                "OFFLINE",
+                f"Health check '{arm.health_check}' failed (exit {res.returncode}): {detail}",
+                {"returncode": res.returncode, "stderr": res.stderr[:200]},
+            )
         except subprocess.TimeoutExpired:
             return ArmHealthResult(
                 arm.id, arm.name, "ASSUMED_READY", f"Executable '{cmd_name}' found at {executable} (health check timed out).", {}
