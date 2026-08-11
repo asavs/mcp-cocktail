@@ -13,6 +13,7 @@ from mcp_cocktail.doctor import (
     MAX_REPORTED_FIELDS,
     READY_STATUSES,
     ArmHealthResult,
+    acquisition_note,
     evaluate_requirements,
     check_arm_binding,
     describe_binding,
@@ -103,6 +104,59 @@ def test_missing_binary_stays_offline():
 
     assert res.status == "OFFLINE"
     assert "not found in PATH" in res.message
+
+
+def test_offline_arm_with_no_route_says_so_instead_of_looking_broken():
+    """A preset is a survey and nobody has all eleven arms, so most OFFLINE
+    lines are arms the reader was never expected to have. Bare OFFLINE makes
+    them indistinguishable from a broken install, and a wall of failures is a
+    report nobody reads to the end."""
+    survey = ArmConfig(id="unowned", name="Unowned", type="cli", command="nonexistent_binary_xyz_123")
+    res = doctor_check_arm(survey)
+
+    assert res.status == "OFFLINE"
+    assert "survey entry, not a broken install" in res.message
+
+
+def test_offline_arm_with_an_install_hint_reports_it():
+    arm = ArmConfig(id="gettable", name="Gettable", type="cli",
+                    command="nonexistent_binary_xyz_123",
+                    install_hint="brew install gettable")
+    res = doctor_check_arm(arm)
+
+    assert res.status == "OFFLINE"
+    assert "Install: brew install gettable" in res.message
+    assert "survey entry" not in res.message
+
+
+def test_arms_with_a_setup_script_are_not_called_survey_entries(tmp_path: Path):
+    """A declared setup_script is an acquisition route. The existing
+    UNCONFIGURED message already covers the case where it is missing."""
+    arm = ArmConfig(id="startable", name="Startable", type="cli",
+                    command="nonexistent_binary_xyz_123",
+                    setup_script="tools/start.sh")
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "start.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+
+    res = doctor_check_arm(arm, tmp_path)
+    assert "survey entry" not in res.message
+
+
+def test_shipped_preset_gives_every_arm_a_route_or_admits_it_has_none():
+    """Guards the gap this field report named: arms listed with no installer.
+
+    Deliberately not "every arm must have a hint" -- an unverified install
+    command shipped in a preset is worse than an honest silence. What must
+    hold is that the report never leaves the reader guessing which case
+    they are in.
+    """
+    config = CocktailConfig.load(PRESETS_DIR / "unity" / "manifest.json")
+    assert config.arms, "preset resolved no arms"
+
+    for arm in config.arms:
+        note = acquisition_note(arm)
+        assert note, f"{arm.id} produces no acquisition note at all"
+        assert ("Install:" in note) or ("survey entry" in note) or arm.setup_script
 
 
 def test_evaluate_requirements():

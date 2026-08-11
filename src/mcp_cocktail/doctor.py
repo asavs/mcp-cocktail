@@ -532,6 +532,25 @@ def missing_setup_script(arm: ArmConfig, workspace_root: Path | None) -> Path | 
     return None if candidate.exists() else candidate
 
 
+def acquisition_note(arm: ArmConfig) -> str:
+    """What an operator can do about an arm that is not installed.
+
+    A preset manifest is a survey of competing arms and nobody has all of
+    them, so most OFFLINE lines in a real run are arms the reader was never
+    expected to have. Reported as a bare OFFLINE they are indistinguishable
+    from a broken install, which makes the whole report look like a wall of
+    failures and trains the reader to skim past the one line that matters.
+    """
+    if arm.install_hint:
+        return f" Install: {arm.install_hint}"
+
+    if not arm.setup_script:
+        return (" No setup_script or install_hint is declared for this arm, so cocktail "
+                "cannot say how to obtain it — this is a survey entry, not a broken install.")
+
+    return ""
+
+
 def doctor_check_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHealthResult:
     result = probe_mcp_arm(arm, workspace_root) if arm.type == "mcp" else probe_cli_arm(arm, workspace_root)
 
@@ -546,9 +565,17 @@ def doctor_check_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmH
                 arm.name,
                 "UNCONFIGURED",
                 f"{result.message} Setup script '{arm.setup_script}' is missing ({absent}), "
-                f"so this arm cannot be started.",
+                f"so this arm cannot be started.{acquisition_note(arm)}",
                 {**result.details, "missing_setup_script": str(absent)},
             )
+
+        return ArmHealthResult(
+            arm.id,
+            arm.name,
+            result.status,
+            f"{result.message}{acquisition_note(arm)}",
+            result.details,
+        )
 
     return result
 

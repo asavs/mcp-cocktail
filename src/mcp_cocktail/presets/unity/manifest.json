@@ -12,7 +12,8 @@
         "MSYS_NO_PATHCONV": "1"
       },
       "health_check": "unity status --json",
-      "binding_path": "data.instances[].project"
+      "binding_path": "data.instances[].project",
+      "install_hint": "Ships with the com.unity.pipeline package in the Unity project; `unity upgrade --check` reports the installed version."
     },
     {
       "id": "official-unity-mcp",
@@ -21,7 +22,8 @@
       "mcp_server": "unity-editor-mcp",
       "tool_prefix": "mcp__unity-editor-mcp__",
       "health_check": "unity status --json",
-      "binding_path": "data.instances[].project"
+      "binding_path": "data.instances[].project",
+      "install_hint": "Same `unity` CLI as official-unity-cli; register it with your harness at LOCAL scope pinned to this project, or it binds elsewhere."
     },
     {
       "id": "coplay-mcp",
@@ -30,7 +32,8 @@
       "mcp_server": "UnityMCP",
       "tool_prefix": "mcp__UnityMCP__",
       "setup_script": "tools/three-way-setup.sh",
-      "health_check": "http://127.0.0.1:8080/mcp"
+      "health_check": "http://127.0.0.1:8080/mcp",
+      "install_hint": "Run the provisioned tools/three-way-setup.sh to start the server, then register the Editor via Window/MCP for Unity -> Connect."
     },
     {
       "id": "ivanmurzak-mcp",

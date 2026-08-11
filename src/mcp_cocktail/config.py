@@ -21,6 +21,12 @@ class ArmConfig:
     capabilities: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     setup_script: str | None = None
+    # How an operator obtains this arm when it is not installed. A manifest is
+    # a survey of competing arms, so most entries in a real preset are things
+    # the reader does not have -- without this, doctor can only report OFFLINE
+    # and leave them to guess whether that is a broken install or an arm they
+    # were never expected to have.
+    install_hint: str | None = None
     health_check: str | None = None
     # Dotted path into the health check's JSON stdout naming the project each
     # live instance is serving, e.g. "data.instances[].project". Lets doctor
@@ -33,7 +39,7 @@ class ArmConfig:
         known = {
             "id", "name", "type", "command", "mcp_server",
             "tool_prefix", "description", "capabilities", "env",
-            "setup_script", "health_check", "binding_path"
+            "setup_script", "install_hint", "health_check", "binding_path"
         }
         extra = {k: v for k, v in data.items() if k not in known}
         caps = data.get("capabilities", [])
@@ -51,6 +57,7 @@ class ArmConfig:
             capabilities=caps,
             env=data.get("env", {}),
             setup_script=data.get("setup_script"),
+            install_hint=data.get("install_hint"),
             health_check=data.get("health_check"),
             binding_path=data.get("binding_path"),
             extra=extra,
