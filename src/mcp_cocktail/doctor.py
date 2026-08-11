@@ -532,6 +532,9 @@ def missing_setup_script(arm: ArmConfig, workspace_root: Path | None) -> Path | 
     return None if candidate.exists() else candidate
 
 
+NO_ROUTE_MARKER = "no install route declared"
+
+
 def acquisition_note(arm: ArmConfig) -> str:
     """What an operator can do about an arm that is not installed.
 
@@ -540,15 +543,33 @@ def acquisition_note(arm: ArmConfig) -> str:
     expected to have. Reported as a bare OFFLINE they are indistinguishable
     from a broken install, which makes the whole report look like a wall of
     failures and trains the reader to skim past the one line that matters.
+
+    Deliberately terse. Spelling the explanation out per arm put the same
+    three lines of prose on eight rows of a real report -- restating the
+    wall of noise it was written to remove. The rows carry a marker; the
+    summary explains it once.
     """
     if arm.install_hint:
-        return f" Install: {arm.install_hint}"
+        return f"Install: {arm.install_hint}"
 
     if not arm.setup_script:
-        return (" No setup_script or install_hint is declared for this arm, so cocktail "
-                "cannot say how to obtain it — this is a survey entry, not a broken install.")
+        return f"({NO_ROUTE_MARKER})"
 
     return ""
+
+
+def append_note(message: str, note: str) -> str:
+    """Join a probe message to its acquisition note without fusing sentences.
+
+    Probe messages are frequently truncated mid-clause by summarize_failure,
+    so they end on a comma as often as a full stop.
+    """
+    if not note:
+        return message
+    if not message.strip():
+        return note
+
+    return f"{message.rstrip().rstrip(',;.')}. {note}"
 
 
 def doctor_check_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHealthResult:
@@ -564,8 +585,11 @@ def doctor_check_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmH
                 arm.id,
                 arm.name,
                 "UNCONFIGURED",
-                f"{result.message} Setup script '{arm.setup_script}' is missing ({absent}), "
-                f"so this arm cannot be started.{acquisition_note(arm)}",
+                append_note(
+                    f"{result.message} Setup script '{arm.setup_script}' is missing ({absent}), "
+                    f"so this arm cannot be started.",
+                    acquisition_note(arm),
+                ),
                 {**result.details, "missing_setup_script": str(absent)},
             )
 
@@ -573,7 +597,7 @@ def doctor_check_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmH
             arm.id,
             arm.name,
             result.status,
-            f"{result.message}{acquisition_note(arm)}",
+            append_note(result.message, acquisition_note(arm)),
             result.details,
         )
 
@@ -624,9 +648,6 @@ def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) 
         sys.stdout.flush()
         return
 
-    print(f"{'Arm ID':<18} {'Arm Name':<24} {'Status':<20} {'Diagnostic Summary'}")
-    print("-" * 85)
-
     labels = {
         "READY": "[READY]",
         "ASSUMED_READY": "[ASSUMED_READY]",
@@ -637,10 +658,21 @@ def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) 
         "OFFLINE": "[OFFLINE]",
     }
 
+    # Fixed widths truncated nothing and aligned nothing: real arm names run
+    # to 43 characters, so every long row pushed the status and diagnostic
+    # columns out of register and the table stopped being scannable.
+    id_w = max(len("Arm ID"), *(len(r.arm_id) for r in results))
+    name_w = max(len("Arm Name"), *(len(r.arm_name) for r in results))
+    status_w = max(len(v) for v in labels.values())
+
+    print(f"{'Arm ID':<{id_w}}  {'Arm Name':<{name_w}}  {'Status':<{status_w}}  Diagnostic Summary")
+    print("-" * (id_w + name_w + status_w + 24))
+
     tally: Counter[str] = Counter()
     for r in results:
         tally[r.status] += 1
-        print(f"{r.arm_id:<18} {r.arm_name:<24} {labels.get(r.status, '[OFFLINE]'):<20} {r.message}")
+        label = labels.get(r.status, "[OFFLINE]")
+        print(f"{r.arm_id:<{id_w}}  {r.arm_name:<{name_w}}  {label:<{status_w}}  {r.message}")
 
     ready_count = sum(tally[s] for s in READY_STATUSES)
 
@@ -651,5 +683,14 @@ def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) 
     )
     summary = f"\nDoctor Summary: {ready_count}/{len(results)} arms READY"
     print(f"{summary} ({breakdown})." if breakdown else f"{summary}.")
+
+    # Say once what the row marker means, rather than on every row that
+    # carries it.
+    no_route = sum(1 for r in results if NO_ROUTE_MARKER in r.message)
+    if no_route:
+        print(f"\n{no_route} arm(s) marked ({NO_ROUTE_MARKER}) declare neither a setup_script nor an")
+        print("install_hint, so cocktail cannot say how to obtain them. In a survey preset that is")
+        print("expected -- they are arms you do not have, not arms that broke. Add an install_hint")
+        print("to the manifest for any you intend to use.")
 
     sys.stdout.flush()

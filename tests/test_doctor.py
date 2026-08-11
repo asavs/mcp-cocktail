@@ -11,10 +11,13 @@ from pathlib import Path
 from mcp_cocktail.config import CocktailConfig, ArmConfig
 from mcp_cocktail.doctor import (
     MAX_REPORTED_FIELDS,
+    NO_ROUTE_MARKER,
     READY_STATUSES,
     ArmHealthResult,
     acquisition_note,
+    append_note,
     evaluate_requirements,
+    print_doctor_report,
     check_arm_binding,
     describe_binding,
     describe_instance,
@@ -115,7 +118,20 @@ def test_offline_arm_with_no_route_says_so_instead_of_looking_broken():
     res = doctor_check_arm(survey)
 
     assert res.status == "OFFLINE"
-    assert "survey entry, not a broken install" in res.message
+    assert NO_ROUTE_MARKER in res.message
+    # The marker earns its place by being short: spelling the explanation out
+    # per arm put three lines of prose on eight rows of a real report.
+    assert len(res.message) < 200
+
+
+def test_note_joins_onto_a_message_without_doubling_its_punctuation():
+    """summarize_failure truncates mid-clause, so probe messages end on a
+    comma about as often as a full stop -- and one already ending in '.' must
+    not acquire a second one."""
+    assert append_note("Server unreachable (timed out).", "(x)") == "Server unreachable (timed out). (x)"
+    assert append_note("not recognized as a command,", "(x)") == "not recognized as a command. (x)"
+    assert append_note("plain", "") == "plain"
+    assert append_note("", "(x)") == "(x)"
 
 
 def test_offline_arm_with_an_install_hint_reports_it():
@@ -126,7 +142,7 @@ def test_offline_arm_with_an_install_hint_reports_it():
 
     assert res.status == "OFFLINE"
     assert "Install: brew install gettable" in res.message
-    assert "survey entry" not in res.message
+    assert NO_ROUTE_MARKER not in res.message
 
 
 def test_arms_with_a_setup_script_are_not_called_survey_entries(tmp_path: Path):
@@ -139,7 +155,7 @@ def test_arms_with_a_setup_script_are_not_called_survey_entries(tmp_path: Path):
     (tmp_path / "tools" / "start.sh").write_text("#!/bin/sh\n", encoding="utf-8")
 
     res = doctor_check_arm(arm, tmp_path)
-    assert "survey entry" not in res.message
+    assert NO_ROUTE_MARKER not in res.message
 
 
 def test_shipped_preset_gives_every_arm_a_route_or_admits_it_has_none():
@@ -155,8 +171,41 @@ def test_shipped_preset_gives_every_arm_a_route_or_admits_it_has_none():
 
     for arm in config.arms:
         note = acquisition_note(arm)
-        assert note, f"{arm.id} produces no acquisition note at all"
-        assert ("Install:" in note) or ("survey entry" in note) or arm.setup_script
+        assert ("Install:" in note) or (NO_ROUTE_MARKER in note) or arm.setup_script, \
+            f"{arm.id} offers the reader no way to tell which case it is in"
+
+
+def test_the_no_route_marker_is_explained_once_not_per_row(capsys):
+    """The first cut of this feature restated its own three-line explanation
+    on every marked row, which reproduced the wall of noise it was written to
+    remove. The rows carry a marker; the summary explains it."""
+    config = CocktailConfig.load(PRESETS_DIR / "unity" / "manifest.json")
+    results = [
+        ArmHealthResult(a.id, a.name, "OFFLINE", append_note("down", acquisition_note(a)), {})
+        for a in config.arms
+    ]
+    print_doctor_report(results, config)
+
+    out = capsys.readouterr().out
+    assert out.count("declare neither a setup_script nor an") == 1
+    assert out.count(f"({NO_ROUTE_MARKER})") > 1, "rows should still be individually marked"
+
+
+def test_report_columns_stay_aligned_for_long_arm_names(capsys):
+    """Real preset names run to 43 characters against a hardcoded width of
+    24, so every long row shoved the status and diagnostic columns out of
+    register and the table stopped being scannable."""
+    config = CocktailConfig.load(PRESETS_DIR / "unity" / "manifest.json")
+    results = [
+        ArmHealthResult("short", "Short", "READY", "fine", {}),
+        ArmHealthResult("a-much-longer-arm-id", "game4automation RealVirtual Digital Twin MCP",
+                        "OFFLINE", "down", {}),
+    ]
+    print_doctor_report(results, config)
+
+    rows = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith(("short ", "a-much-longer"))]
+    assert len(rows) == 2
+    assert len({row.index("[") for row in rows}) == 1, "status column is ragged"
 
 
 def test_evaluate_requirements():
