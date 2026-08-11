@@ -10,7 +10,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from mcp_cocktail.config import TrapRule, TrapsConfig
+from mcp_cocktail.config import TrapRule, TrapsConfig, resolve_traps_path
+
+# Reserved state key; rule ids never collide because they are matched literally.
+NO_STORE_WARNED = "__mcp_cocktail_no_rule_store_warned__"
 
 READ_VERB = re.compile(
     r"^(?:git\s+(?:diff|log|status|show|check-attr|branch)|grep|rg|cat|head|tail|type|Get-Content|"
@@ -174,6 +177,17 @@ def build_hook_output(messages: list[str]) -> dict[str, Any]:
     }
 
 
+def describe_rule_store(traps_path: Path | str | None = None) -> str:
+    """Human-readable account of which rule store resolved, and whether it exists."""
+    target = Path(traps_path) if traps_path else Path.cwd()
+    resolved = resolve_traps_path(target) if (traps_path is None or target.is_dir()) else target
+
+    if not resolved.exists():
+        return f"no rule store at {resolved}"
+
+    return f"{resolved} ({len(TrapsConfig.load(resolved).rules)} rules)"
+
+
 def get_state_path(session_id: str) -> Path:
     base = Path(os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp")
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", session_id or "nosession")
@@ -222,6 +236,19 @@ def run_guardrail(traps_path: Path | str | None = None) -> int:
     state_file = get_state_path(session_id)
     state = load_state(state_file)
 
+    # An inert guardrail is indistinguishable from a quiet one. Say so once per
+    # session, to the operator rather than into the agent's context.
+    if not traps.rules and not state.get(NO_STORE_WARNED):
+        state[NO_STORE_WARNED] = 1.0
+        save_state(state_file, state)
+        resolved = describe_rule_store(traps_path)
+        print(json.dumps({
+            "systemMessage": f"mcp-cocktail: no trap rules loaded ({resolved}). "
+                             f"The PreToolUse guardrail is installed but inert. "
+                             f"Run `mcp-cocktail setup --preset <domain>` to populate a rule store.",
+        }, ensure_ascii=False))
+        return 0
+
     now = time.time()
     fired_messages = evaluate_rules(tool_name, tool_input, traps, state, now)
 
@@ -232,8 +259,13 @@ def run_guardrail(traps_path: Path | str | None = None) -> int:
     return 0
 
 
-def selftest() -> int:
-    """Built-in selftest for rule evaluation logic."""
+def selftest(traps_path: Path | str | None = None) -> int:
+    """Selftest the rule engine, then report the deployment it is protecting.
+
+    The engine passing says nothing about whether any rules are loaded. A
+    collaborator who inherits a configured hook, a passing selftest, and an
+    empty workspace has zero protection and no signal that anything is wrong.
+    """
     test_rules = TrapsConfig(
         version="1.0",
         domain="test",
@@ -267,5 +299,18 @@ def selftest() -> int:
     hits = evaluate_rules("mcp__unity__eval", {"code": "eval()"}, test_rules, state, now)
     assert "TRAP R2" in hits, f"Expected R2 hit, got {hits}"
 
-    print("Guardrail selftest PASSED.")
+    print("Guardrail engine selftest PASSED.")
+
+    target = Path(traps_path) if traps_path else Path.cwd()
+    resolved = resolve_traps_path(target) if (traps_path is None or target.is_dir()) else target
+    rule_count = len(TrapsConfig.load(resolved).rules) if resolved.exists() else 0
+
+    print(f"Rule store: {resolved}")
+    print(f"Rules loaded: {rule_count}")
+
+    if rule_count == 0:
+        print("\nWARNING: the engine works but no rules are deployed here — nothing is protected.")
+        print("Run `mcp-cocktail setup --preset <domain>` to populate a rule store.")
+        return 1
+
     return 0

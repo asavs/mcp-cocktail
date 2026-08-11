@@ -241,6 +241,15 @@ def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) 
     print(f"\n=== mcp-cocktail Doctor: Arm Health & Diagnostics ===")
     print(f"Domain: {config.name} ({len(results)} arms defined)\n")
 
+    # "0/0 arms READY" reads as a pass. Nothing was checked because nothing is
+    # configured, which is a setup failure, not a clean bill of health.
+    if not results:
+        print("[UNCONFIGURED] No arms defined — nothing was probed.")
+        print(f"No manifest resolved under {config.root_dir}.")
+        print("Run `mcp-cocktail init` or `mcp-cocktail setup --preset <domain>` first.")
+        sys.stdout.flush()
+        return
+
     print(f"{'Arm ID':<18} {'Arm Name':<24} {'Status':<20} {'Diagnostic Summary'}")
     print("-" * 85)
 

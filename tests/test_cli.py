@@ -24,8 +24,20 @@ def test_cli_setup_preset(tmp_path: Path):
 
 
 def test_cli_check_selftest():
-    res = main(["check", "--selftest"])
-    assert res == 0
+    preset = Path(__file__).resolve().parents[1] / "examples" / "unity" / ".agents" / "traps.json"
+    assert main(["check", "--selftest", "--traps", str(preset)]) == 0
+
+
+def test_cli_check_selftest_fails_when_nothing_is_deployed(tmp_path: Path):
+    """The engine passing is not evidence that any rules are loaded."""
+    assert main(["check", "--selftest", "--traps", str(tmp_path)]) == 1
+
+
+def test_cli_doctor_rejects_an_unconfigured_workspace(tmp_path: Path, monkeypatch):
+    """Field log Finding 4: no manifest reported '0/0 arms READY' and exit 0,
+    so `doctor && proceed` sailed through a workspace with nothing set up."""
+    monkeypatch.chdir(tmp_path)
+    assert main(["doctor"]) == 2
 
 
 def test_cli_note(tmp_path: Path):

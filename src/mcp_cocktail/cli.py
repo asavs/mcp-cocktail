@@ -143,6 +143,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
     doc_results = run_doctor(config)
     print_doctor_report(doc_results, config)
 
+    if not doc_results:
+        print(f"\n[FAILED] setup copied preset '{preset}' but no arms resolved — nothing is configured.")
+        return 2
+
     print(f"\n[OK] mcp-cocktail setup complete for '{preset}' domain!")
     return 0
 
@@ -205,12 +209,14 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     config = CocktailConfig.load(Path.cwd())
     doc_results = run_doctor(config)
     print_doctor_report(doc_results, config)
-    return 0
+    # Non-zero so `mcp-cocktail doctor && <proceed>` cannot sail through an
+    # unconfigured workspace.
+    return 0 if doc_results else 2
 
 
 def cmd_check(args: argparse.Namespace) -> int:
     if args.selftest:
-        return guardrail_selftest()
+        return guardrail_selftest(args.traps)
     return run_guardrail(args.traps)
 
 

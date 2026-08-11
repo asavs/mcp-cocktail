@@ -2,6 +2,7 @@
 
 import io
 import json
+from pathlib import Path
 
 from mcp_cocktail.config import TrapRule, TrapsConfig
 from mcp_cocktail.guardrail import (
@@ -92,8 +93,41 @@ def test_evaluate_rules_cooldown():
 
 
 def test_guardrail_selftest():
-    res = selftest()
+    # Repo root resolves the shipped rule store, so the engine test and the
+    # deployment report both pass.
+    res = selftest(Path(__file__).resolve().parents[1] / "examples" / "unity" / ".agents" / "traps.json")
     assert res == 0
+
+
+def test_selftest_reports_the_deployment_not_just_the_engine(tmp_path, capsys):
+    """Field log Finding 5: a collaborator inherits a configured hook, a
+    passing selftest, and zero protection."""
+    res = selftest(tmp_path)
+    out = capsys.readouterr().out
+
+    assert "PASSED" in out, "the engine itself still passes"
+    assert "Rules loaded: 0" in out
+    assert "nothing is protected" in out
+    assert res == 1
+
+
+def test_check_warns_once_per_session_when_no_rules_are_deployed(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TEMP", str(tmp_path))
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "unity open"}, "session_id": "s1"})
+
+    empty_workspace = tmp_path / "workspace"
+    empty_workspace.mkdir()
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(payload))
+    assert run_guardrail(empty_workspace) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert "inert" in first["systemMessage"]
+    # Operator-facing only: must not be injected into the agent's context.
+    assert "hookSpecificOutput" not in first
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(payload))
+    assert run_guardrail(empty_workspace) == 0
+    assert capsys.readouterr().out == "", "warning repeated within the same session"
 
 
 def test_build_hook_output_uses_claude_code_envelope():
