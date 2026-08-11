@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +103,38 @@ def save_json_file(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+
+
+def provision_tree(src: Path, dst: Path) -> tuple[list[str], list[str]]:
+    """Merge a preset directory into a workspace, never overwriting.
+
+    An all-or-nothing `copytree` guarded on `not dst.exists()` skips the whole
+    provisioning step whenever the workspace already has a directory of that
+    name -- which for any real project is the common case, and which silently
+    leaves declared setup_scripts undelivered. Merging per file keeps the
+    don't-clobber guarantee at the granularity where it belongs.
+
+    Returns (copied, skipped) as workspace-relative posix paths.
+    """
+    copied: list[str] = []
+    skipped: list[str] = []
+
+    if not src.is_dir():
+        return copied, skipped
+
+    for source_file in sorted(p for p in src.rglob("*") if p.is_file()):
+        relative = source_file.relative_to(src)
+        target = dst / relative
+
+        if target.exists():
+            skipped.append(relative.as_posix())
+            continue
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_file, target)  # copy2 preserves the executable bit
+        copied.append(relative.as_posix())
+
+    return copied, skipped
 
 
 def is_mcp_cocktail_hook(hook_cmd: str) -> bool:

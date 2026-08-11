@@ -4,10 +4,11 @@ import json
 from pathlib import Path
 import re
 
-from mcp_cocktail.config import TrapsConfig
+from mcp_cocktail.config import CocktailConfig, TrapsConfig
 from mcp_cocktail.installer import (
     DEFAULT_HOOK_MATCHER,
     install_hook,
+    provision_tree,
     uninstall_hook,
     load_json_file,
     detect_current_active_harness,
@@ -41,6 +42,52 @@ def test_installed_matcher_reaches_every_shipped_rule(tmp_path: Path):
 
 def test_default_matcher_subscribes_to_all_tools():
     assert DEFAULT_HOOK_MATCHER == "*"
+
+
+def test_provision_tree_merges_into_an_existing_directory(tmp_path: Path):
+    """Field log V1: setup guarded its copytree on `not dst.exists()`, so a
+    workspace that already had a tools/ directory -- any real game repo --
+    silently received nothing, leaving the declared setup_script undelivered
+    and coplay-mcp unstartable."""
+    src = tmp_path / "preset" / "tools"
+    (src / "git").mkdir(parents=True)
+    (src / "three-way-setup.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    (src / "git" / "setup.sh").write_text("preset version\n", encoding="utf-8")
+
+    dst = tmp_path / "workspace" / "tools"
+    dst.mkdir(parents=True)
+    (dst / "the-users-own-script.sh").write_text("do not touch\n", encoding="utf-8")
+    (dst / "git").mkdir()
+    (dst / "git" / "setup.sh").write_text("the user's version\n", encoding="utf-8")
+
+    copied, skipped = provision_tree(src, dst)
+
+    assert "three-way-setup.sh" in copied
+    assert (dst / "three-way-setup.sh").exists()
+    # Never clobber, and say which files were left alone.
+    assert skipped == ["git/setup.sh"]
+    assert (dst / "git" / "setup.sh").read_text(encoding="utf-8") == "the user's version\n"
+    assert (dst / "the-users-own-script.sh").read_text(encoding="utf-8") == "do not touch\n"
+
+
+def test_provision_tree_handles_a_missing_source(tmp_path: Path):
+    assert provision_tree(tmp_path / "nope", tmp_path / "dst") == ([], [])
+
+
+def test_provisioning_delivers_every_declared_setup_script(tmp_path: Path):
+    """The end state V1 is really about: after provisioning, every arm that
+    names a setup_script must actually have one on disk."""
+    preset_root = Path(__file__).resolve().parents[1] / "examples" / "unity"
+    workspace = tmp_path / "workspace"
+    (workspace / "tools").mkdir(parents=True)  # pre-existing, as in a real repo
+
+    provision_tree(preset_root / "tools", workspace / "tools")
+
+    for arm in CocktailConfig.load(preset_root / ".agents" / "manifest.json").arms:
+        if arm.setup_script:
+            assert (workspace / arm.setup_script).exists(), (
+                f"{arm.id}: setup_script '{arm.setup_script}' not provisioned"
+            )
 
 
 def _cocktail_hooks(settings_file: Path) -> list[dict]:

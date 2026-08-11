@@ -17,10 +17,10 @@ from mcp_cocktail.discover import (
     generate_agentic_discover_task,
     merge_manifests,
 )
-from mcp_cocktail.doctor import run_doctor, print_doctor_report
+from mcp_cocktail.doctor import run_doctor, print_doctor_report, missing_setup_script
 from mcp_cocktail.guardrail import run_guardrail, selftest as guardrail_selftest
 from mcp_cocktail.inbox import append_note, show_inbox
-from mcp_cocktail.installer import DEFAULT_HOOK_MATCHER, install_hook, uninstall_hook
+from mcp_cocktail.installer import DEFAULT_HOOK_MATCHER, install_hook, provision_tree, uninstall_hook
 from mcp_cocktail.miner import cmd_sweep, print_sweep_report, summarize_transcript, parse_blocks
 from mcp_cocktail.proxy import run_proxy
 from mcp_cocktail.runner import create_trial
@@ -128,9 +128,11 @@ def cmd_setup(args: argparse.Namespace) -> int:
         shutil.copy(src_traps, dst_traps)
         print(f"Copied preset trap rules -> {dst_traps}")
 
-    if src_tools.exists() and not dst_tools.exists():
-        shutil.copytree(src_tools, dst_tools)
-        print(f"Provisioned domain helper tools -> {dst_tools}")
+    copied, skipped = provision_tree(src_tools, dst_tools)
+    if copied:
+        print(f"Provisioned {len(copied)} domain helper tool(s) -> {dst_tools}")
+    if skipped:
+        print(f"Kept {len(skipped)} existing file(s) in {dst_tools}: {', '.join(skipped)}")
 
     ok, msg = install_hook(
         harness=args.harness,
@@ -147,6 +149,16 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if not doc_results:
         print(f"\n[FAILED] setup copied preset '{preset}' but no arms resolved — nothing is configured.")
         return 2
+
+    # Provisioning is what makes a declared setup_script real. Say so here
+    # rather than leaving the user to discover it in a doctor line later.
+    unstartable = [
+        (arm.id, missing_setup_script(arm, config.root_dir))
+        for arm in config.arms
+        if missing_setup_script(arm, config.root_dir)
+    ]
+    for arm_id, absent in unstartable:
+        print(f"[WARN] {arm_id}: setup script not provisioned at {absent} — that arm cannot be started.")
 
     print(f"\n[OK] mcp-cocktail setup complete for '{preset}' domain!")
     return 0
