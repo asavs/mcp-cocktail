@@ -20,3 +20,13 @@ mcpcocktail = "mcp_cocktail.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# `setup --preset` copies these into the user's workspace, so they have to travel
+# in the wheel -- a non-editable install has no repo alongside it to read from.
+# Dotfiles need their own pattern: the leading `.` is not matched by `*`.
+[tool.setuptools.package-data]
+mcp_cocktail = [
+    "presets/*/*.json",
+    "presets/*/tools/**/*",
+    "presets/*/tools/**/.*",
+]

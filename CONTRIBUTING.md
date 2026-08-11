@@ -22,14 +22,14 @@ To prevent developers and AI agents around the world from rediscovering the same
 ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
 │ Strategy 1:      │  │ Strategy 2:      │  │ Strategy 3:      │  │ Strategy 4:      │
 │ In-Repo Presets  │  │ Automated RSI    │  │ Central Rule Sync│  │ Community Score  │
-│ (examples/unity) │  │ Inbox Merging    │  │ (mcp-cocktail    │  │ Leaderboard      │
+│ (presets/unity)  │  │ Inbox Merging    │  │ (mcp-cocktail    │  │ Leaderboard      │
 │                  │  │ (note -> PR)     │  │  sync)           │  │                  │
 └──────────────────┘  └──────────────────┘  └──────────────────┘  └──────────────────┘
 ```
 
-### 1. Upstream Preset Curation (`examples/<domain>/`)
-- **How it works:** `examples/<domain>/` acts as the canonical gold-standard preset repository.
-- **Pooling Action:** When you or your AI agent discover a new MCP server or CLI quirk, submit a 1-line PR updating `examples/<domain>/traps.json` or `examples/<domain>/cocktail.json`.
+### 1. Upstream Preset Curation (`src/mcp_cocktail/presets/<domain>/`)
+- **How it works:** `src/mcp_cocktail/presets/<domain>/` acts as the canonical gold-standard preset repository. It lives inside the package (not beside it) because `setup --preset` has to find these files in a plain `pip install`, where no repo checkout exists. The supporting evidence — trial reports, research logs, setup guides — stays in `examples/<domain>/`.
+- **Pooling Action:** When you or your AI agent discover a new MCP server or CLI quirk, submit a 1-line PR updating `src/mcp_cocktail/presets/<domain>/traps.json` or `.../manifest.json`.
 - **Benefit:** Anyone running `mcp-cocktail setup --preset <domain>` anywhere in the world instantly receives the pooled collective intelligence of every contributor!
 
 ### 2. Automated RSI Inbox Merging (`findings-inbox.md` $\rightarrow$ Weakness Rules)
@@ -51,7 +51,7 @@ To prevent developers and AI agents around the world from rediscovering the same
 
 ## 🌟 Ways to Contribute
 
-1. **Add a New Domain Preset (`examples/<domain>/`):** Curate official and open-source MCPs/CLIs for a new software ecosystem.
+1. **Add a New Domain Preset (`src/mcp_cocktail/presets/<domain>/`):** Curate official and open-source MCPs/CLIs for a new software ecosystem.
 2. **Contribute Trap Rules (`traps.json`):** Add real-time guardrail rules for unhandled bugs, silent parameter drops, or deadlocks in existing tools.
 3. **Enhance Core Engine Modules (`src/mcp_cocktail/`):** Improve transcript mining, stdio MCP proxying, or doctor health probes.
 4. **Submit Upstream Bug Reports:** Turn mined friction into reproducible upstream vendor issue drafts.
@@ -62,12 +62,12 @@ To prevent developers and AI agents around the world from rediscovering the same
 
 To add a new software domain (e.g., `postgres`, `docker`, `figma`):
 
-1. Create a directory under `examples/<domain>/`:
+1. Create a directory under `src/mcp_cocktail/presets/<domain>/`:
    ```bash
-   mkdir -p examples/postgres/docs examples/postgres/tools
+   mkdir -p src/mcp_cocktail/presets/postgres/tools
    ```
 
-2. Create `examples/<domain>/cocktail.json` defining the available arms:
+2. Create `src/mcp_cocktail/presets/<domain>/manifest.json` defining the available arms:
    ```json
    {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -98,8 +98,12 @@ To add a new software domain (e.g., `postgres`, `docker`, `figma`):
    }
    ```
 
-3. Create `examples/<domain>/traps.json` with initial guardrail rules for that domain.
-4. Create `examples/<domain>/README.md` explaining setup and tool usage for that domain.
+3. Create `src/mcp_cocktail/presets/<domain>/traps.json` with initial guardrail rules for that domain.
+4. Create `examples/<domain>/README.md` explaining setup and tool usage, plus whatever evidence
+   (trial reports, research notes) backs the preset. That half stays in the repo and out of the wheel.
+5. Run `pytest tests/test_installer.py` — `test_pyproject_packages_every_preset_file` fails if any
+   file you added is not matched by a `[tool.setuptools.package-data]` glob in `pyproject.toml`,
+   which is the difference between shipping the preset and silently omitting it.
 
 ---
 

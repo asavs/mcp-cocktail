@@ -25,8 +25,7 @@ from mcp_cocktail.doctor import (
     resolve_probe_binary,
     summarize_failure,
 )
-
-PRESETS_DIR = Path(__file__).resolve().parents[1] / "examples"
+from mcp_cocktail.installer import PRESETS_DIR
 
 
 def test_probe_cli_arm_offline():
@@ -313,7 +312,7 @@ def test_describe_instance_skips_structure_and_caps_width():
 
 
 def test_unity_preset_declares_a_binding_for_project_scoped_arms():
-    arms = {a.id: a for a in CocktailConfig.load(PRESETS_DIR / "unity" / ".agents" / "manifest.json").arms}
+    arms = {a.id: a for a in CocktailConfig.load(PRESETS_DIR / "unity" / "manifest.json").arms}
     for arm_id in ("official-unity-cli", "official-unity-mcp"):
         assert arms[arm_id].binding_path == "data.instances[].project"
 
@@ -340,7 +339,7 @@ def test_preset_setup_script_resolves_after_setup():
     """setup copies <preset>/tools -> <workspace>/tools, so a setup_script
     declared as tools/... must exist at that path inside the preset."""
     preset_root = PRESETS_DIR / "unity"
-    for arm in CocktailConfig.load(preset_root / ".agents" / "manifest.json").arms:
+    for arm in CocktailConfig.load(preset_root / "manifest.json").arms:
         if arm.setup_script:
             assert (preset_root / arm.setup_script).exists(), (
                 f"{arm.id}: setup_script '{arm.setup_script}' not present in the preset"
@@ -351,7 +350,7 @@ def test_shipped_presets_state_urls_bare():
     """Regression: every arm in the Unity preset wrapped its URL in `curl -s`,
     so 11/11 arms took probe_cli_arm and the HTTP + stdio branches were dead
     code. SOCKET_BOUND_ONLY (P4) was unreachable."""
-    manifests = sorted(PRESETS_DIR.glob("*/.agents/manifest.json"))
+    manifests = sorted(PRESETS_DIR.glob("*/manifest.json"))
     assert manifests, "expected at least one shipped preset"
 
     for manifest in manifests:

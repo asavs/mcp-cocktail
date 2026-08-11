@@ -231,8 +231,16 @@ my-project/
 
 ## 🎮 Reference Datasets
 
-See `examples/unity/` for a complete reference dataset containing:
-- Multi-arm evaluation manifest (`examples/unity/cocktail.json`) with 11 curated arms
-- Comprehensive Unity trap rule store (`examples/unity/traps.json`)
+The Unity domain ships in two halves.
+
+The **preset** — what `setup --preset unity` actually copies into your workspace — lives inside
+the package at `src/mcp_cocktail/presets/unity/`, so it travels in the wheel:
+- Multi-arm evaluation manifest (`manifest.json`) with 11 curated arms
+- Comprehensive Unity trap rule store (`traps.json`)
+- Domain helper scripts (`tools/`), provisioned to `<workspace>/tools/`
+
+The **reference dataset** — the evidence behind the preset — stays in the repo at
+`examples/unity/`:
 - Historic trial reports and scorecard (`examples/unity/docs/trials/`)
 - Historical research log (`examples/unity/UNITY-TOOLING-NOTES.md`)
+- Setup guides and upstream bug drafts (`examples/unity/docs/`)

@@ -15,6 +15,7 @@ from mcp_cocktail.guardrail import (
     run_guardrail,
     selftest,
 )
+from mcp_cocktail.installer import PRESETS_DIR
 
 
 def test_split_segments():
@@ -142,9 +143,7 @@ def test_sanitizing_leaves_ordinary_commands_untouched():
 
 
 def _unity_preset_traps() -> TrapsConfig:
-    return TrapsConfig.load(
-        Path(__file__).resolve().parents[1] / "examples" / "unity" / ".agents" / "traps.json"
-    )
+    return TrapsConfig.load(PRESETS_DIR / "unity" / "traps.json")
 
 
 def test_no_editor_precondition_rule_fires_once_per_session():
@@ -182,7 +181,7 @@ def test_scene_hierarchy_rule_targets_only_that_tool():
 def test_guardrail_selftest():
     # Repo root resolves the shipped rule store, so the engine test and the
     # deployment report both pass.
-    res = selftest(Path(__file__).resolve().parents[1] / "examples" / "unity" / ".agents" / "traps.json")
+    res = selftest(PRESETS_DIR / "unity" / "traps.json")
     assert res == 0
 
 

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 from mcp_cocktail.cli import main
+from mcp_cocktail.installer import PRESETS_DIR
 
 
 def test_cli_init(tmp_path: Path):
@@ -24,8 +25,20 @@ def test_cli_setup_preset(tmp_path: Path):
         assert settings_file.exists()
 
 
+def test_cli_setup_names_the_shipped_presets_when_one_is_unknown(tmp_path: Path, capsys):
+    """A typo and an install that shipped no presets fail the same way from the
+    user's side, so the message has to say which presets this install has."""
+    with patch("pathlib.Path.cwd", return_value=tmp_path):
+        assert main(["setup", "--preset", "postgres"]) == 1
+
+    out = capsys.readouterr().out
+    assert "postgres" in out
+    assert "unity" in out
+    assert not (tmp_path / ".agents").exists(), "a failed setup left a partial workspace"
+
+
 def test_cli_check_selftest():
-    preset = Path(__file__).resolve().parents[1] / "examples" / "unity" / ".agents" / "traps.json"
+    preset = PRESETS_DIR / "unity" / "traps.json"
     assert main(["check", "--selftest", "--traps", str(preset)]) == 0
 
 

@@ -4,10 +4,16 @@ import json
 from pathlib import Path
 import re
 
+import pytest
+
+import mcp_cocktail
 from mcp_cocktail.config import CocktailConfig, TrapsConfig
 from mcp_cocktail.installer import (
     DEFAULT_HOOK_MATCHER,
+    PRESETS_DIR,
+    available_presets,
     install_hook,
+    preset_dir,
     provision_tree,
     uninstall_hook,
     load_json_file,
@@ -32,8 +38,7 @@ def test_installed_matcher_reaches_every_shipped_rule(tmp_path: Path):
     install_hook(harness="claude", target_path=str(settings_file))
     matcher = load_json_file(settings_file)["hooks"]["PreToolUse"][0]["matcher"]
 
-    repo_root = Path(__file__).resolve().parents[1]
-    traps = TrapsConfig.load(repo_root / "examples" / "unity" / ".agents" / "traps.json")
+    traps = TrapsConfig.load(PRESETS_DIR / "unity" / "traps.json")
     assert traps.rules, "expected the Unity preset to ship rules"
 
     for tool in ("Bash", "PowerShell", "Edit", "Write", "mcp__UnityMCP__manage_gameobject"):
@@ -77,17 +82,66 @@ def test_provision_tree_handles_a_missing_source(tmp_path: Path):
 def test_provisioning_delivers_every_declared_setup_script(tmp_path: Path):
     """The end state V1 is really about: after provisioning, every arm that
     names a setup_script must actually have one on disk."""
-    preset_root = Path(__file__).resolve().parents[1] / "examples" / "unity"
+    preset_root = PRESETS_DIR / "unity"
     workspace = tmp_path / "workspace"
     (workspace / "tools").mkdir(parents=True)  # pre-existing, as in a real repo
 
     provision_tree(preset_root / "tools", workspace / "tools")
 
-    for arm in CocktailConfig.load(preset_root / ".agents" / "manifest.json").arms:
+    for arm in CocktailConfig.load(preset_root / "manifest.json").arms:
         if arm.setup_script:
             assert (workspace / arm.setup_script).exists(), (
                 f"{arm.id}: setup_script '{arm.setup_script}' not provisioned"
             )
+
+
+def test_presets_resolve_relative_to_the_package_not_the_repo():
+    """Regression: presets resolved as `Path(__file__).parents[2] / "examples"`,
+    which is the repo root only under an editable install. Under a real
+    `pip install` that path lands beside site-packages and `setup --preset`
+    could never find a preset. Anchoring inside the package is the fix, so
+    assert the anchor rather than the happy path -- the happy path passes in
+    this checkout either way."""
+    package_root = Path(mcp_cocktail.__file__).resolve().parent
+    assert package_root in PRESETS_DIR.parents or PRESETS_DIR.parent == package_root
+
+
+def test_every_shipped_preset_carries_a_manifest():
+    presets = available_presets()
+    assert presets, "expected at least one shipped preset"
+    for name in presets:
+        assert (PRESETS_DIR / name / "manifest.json").exists(), f"preset '{name}' ships no manifest"
+
+
+def test_preset_dir_resolves_only_a_shipped_name():
+    assert preset_dir("unity") == PRESETS_DIR / "unity"
+    assert preset_dir("no-such-domain") is None
+    # A preset id names one directory. Anything that walks is not an id.
+    assert preset_dir("../presets/unity") is None
+    assert preset_dir("unity/tools") is None
+
+
+def test_pyproject_packages_every_preset_file():
+    """The bug this guards is silent: a preset file that no package-data glob
+    matches is simply absent from the wheel, and only shows up as a broken
+    `setup --preset` on a user's machine. Match the shipped tree against the
+    declared globs here, where adding an unpackaged file fails immediately."""
+    tomllib = pytest.importorskip("tomllib")
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    with open(pyproject, "rb") as fh:
+        patterns = tomllib.load(fh)["tool"]["setuptools"]["package-data"]["mcp_cocktail"]
+
+    package_root = PRESETS_DIR.parent
+    packaged = {p for pattern in patterns for p in package_root.glob(pattern) if p.is_file()}
+
+    for shipped in PRESETS_DIR.rglob("*"):
+        if not shipped.is_file() or "__pycache__" in shipped.parts:
+            continue
+        assert shipped in packaged, (
+            f"{shipped.relative_to(package_root).as_posix()} matches no package-data glob "
+            f"-- it will be missing from the wheel"
+        )
 
 
 def _cocktail_hooks(settings_file: Path) -> list[dict]:

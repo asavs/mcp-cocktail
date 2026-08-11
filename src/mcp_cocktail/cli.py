@@ -25,7 +25,14 @@ from mcp_cocktail.doctor import (
 )
 from mcp_cocktail.guardrail import run_guardrail, selftest as guardrail_selftest
 from mcp_cocktail.inbox import append_note, show_inbox
-from mcp_cocktail.installer import DEFAULT_HOOK_MATCHER, install_hook, provision_tree, uninstall_hook
+from mcp_cocktail.installer import (
+    DEFAULT_HOOK_MATCHER,
+    available_presets,
+    install_hook,
+    preset_dir,
+    provision_tree,
+    uninstall_hook,
+)
 from mcp_cocktail.miner import cmd_sweep, print_sweep_report, summarize_transcript, parse_blocks
 from mcp_cocktail.proxy import run_proxy
 from mcp_cocktail.runner import create_trial
@@ -101,33 +108,34 @@ def cmd_init(args: argparse.Namespace) -> int:
 def cmd_setup(args: argparse.Namespace) -> int:
     """1-Command automated setup and arm health validation for any project."""
     preset = args.preset or "unity"
-    repo_root = Path(__file__).resolve().parents[2]
-    example_dir = repo_root / "examples" / preset
+    src_dir = preset_dir(preset)
 
-    if not example_dir.exists():
-        print(f"Error: Preset '{preset}' not found in {repo_root / 'examples'}")
+    if src_dir is None:
+        known = ", ".join(available_presets()) or "(none)"
+        print(f"Error: preset '{preset}' is not shipped with this install. Known presets: {known}")
         return 1
+
+    src_manifest = src_dir / "manifest.json"
+    src_traps = src_dir / "traps.json"
+    src_tools = src_dir / "tools"
+
+    # A preset directory that exists but has no manifest means the files did not
+    # make it into the install. Say that here rather than provisioning half a
+    # workspace and letting the doctor report "no arms" two screens later.
+    if not src_manifest.exists():
+        print(f"Error: preset '{preset}' is installed without a manifest at {src_manifest}.")
+        print("       This install is incomplete -- reinstall mcp-cocktail.")
+        return 2
 
     agents_dir = Path.cwd() / ".agents"
     agents_dir.mkdir(parents=True, exist_ok=True)
-
-    src_manifest = example_dir / ".agents" / "manifest.json"
-    if not src_manifest.exists():
-        src_manifest = example_dir / "cocktail.json"
-
-    src_traps = example_dir / ".agents" / "traps.json"
-    if not src_traps.exists():
-        src_traps = example_dir / "traps.json"
-
-    src_tools = example_dir / "tools"
 
     dst_manifest = agents_dir / "manifest.json"
     dst_traps = agents_dir / "traps.json"
     dst_tools = Path.cwd() / "tools"
 
-    if src_manifest.exists():
-        shutil.copy(src_manifest, dst_manifest)
-        print(f"Copied preset manifest -> {dst_manifest}")
+    shutil.copy(src_manifest, dst_manifest)
+    print(f"Copied preset manifest -> {dst_manifest}")
 
     if src_traps.exists():
         shutil.copy(src_traps, dst_traps)
@@ -384,7 +392,11 @@ def main(argv: list[str] | None = None) -> int:
     p_init.add_argument("--force", action="store_true", help="Overwrite existing manifest")
 
     p_setup = subparsers.add_parser("setup", help="1-Command automated setup and doctor validation for a target domain (e.g. unity)")
-    p_setup.add_argument("--preset", default="unity", help="Domain preset name (default: unity)")
+    p_setup.add_argument(
+        "--preset",
+        default="unity",
+        help=f"Domain preset name (default: unity). Shipped: {', '.join(available_presets()) or '(none)'}",
+    )
     p_setup.add_argument("--harness", default="auto", help="Target harness (claude, omp, mcp, auto)")
     p_setup.add_argument("--global", dest="global_settings", action="store_true", help="Target global settings")
     p_setup.add_argument("--settings", help="Explicit path to settings.json")

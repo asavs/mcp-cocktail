@@ -21,6 +21,30 @@ DEFAULT_HOOK_COMMAND = "mcp-cocktail check"
 # the weakest valid matcher is the one that cannot silently strand a rule.
 DEFAULT_HOOK_MATCHER = "*"
 
+# Presets ship *inside* the package, not beside it. Resolving them from the repo
+# root (`Path(__file__).parents[2] / "examples"`) only ever worked under an
+# editable install: a real `pip install` puts the package in site-packages, where
+# parents[2] is site-packages' parent and no examples/ exists. Anchoring on the
+# package directory resolves identically in both modes, and the pyproject
+# package-data globs are what put these files in the wheel.
+PRESETS_DIR = Path(__file__).resolve().parent / "presets"
+
+
+def available_presets() -> list[str]:
+    """Preset ids shipped with this install, sorted."""
+    if not PRESETS_DIR.is_dir():
+        return []
+    return sorted(p.name for p in PRESETS_DIR.iterdir() if p.is_dir() and not p.name.startswith("_"))
+
+
+def preset_dir(name: str) -> Path | None:
+    """Directory of a shipped preset, or None if this install does not carry it."""
+    candidate = PRESETS_DIR / name
+    # Reject traversal and nesting: a preset id names one directory, not a path.
+    if name in available_presets() and candidate.is_dir():
+        return candidate
+    return None
+
 
 def detect_domain_preset(target_dir: Path | str | None = None) -> str:
     """Auto-detect the workspace domain preset based on file signatures."""

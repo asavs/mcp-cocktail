@@ -15,7 +15,11 @@ from typing import Any
 from mcp_cocktail.config import CocktailConfig, TrapsConfig, TrapRule, resolve_traps_path
 from mcp_cocktail.scorecard import propose_rsi_guardrails
 
-REMOTE_REGISTRY_BASE_URL = "https://raw.githubusercontent.com/asavs/mcp-cocktail/main/examples"
+# Serves the same preset tree the wheel ships, so a `sync pull` and a
+# `setup --preset` agree on what the domain's rules are.
+REMOTE_REGISTRY_BASE_URL = (
+    "https://raw.githubusercontent.com/asavs/mcp-cocktail/main/src/mcp_cocktail/presets"
+)
 
 
 def fetch_remote_domain_traps(domain: str) -> dict[str, Any] | None:
@@ -87,7 +91,7 @@ def push_domain_contributions(domain: str, root_dir: Path | str | None = None) -
         "domain": domain,
         "proposed_rules_count": len(candidates),
         "proposed_rules": candidates,
-        "instructions": "Submit this bundle in a PR to examples/<domain>/traps.json on the mcp-cocktail registry repository.",
+        "instructions": "Submit this bundle in a PR to src/mcp_cocktail/presets/<domain>/traps.json on the mcp-cocktail registry repository.",
     }
 
     bundle_path.write_text(json.dumps(bundle, indent=2), encoding="utf-8")
