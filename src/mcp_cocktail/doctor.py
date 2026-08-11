@@ -24,9 +24,73 @@ from mcp_cocktail.config import CocktailConfig, ArmConfig
 class ArmHealthResult:
     arm_id: str
     arm_name: str
-    status: str  # "READY", "ASSUMED_READY", "SOCKET_BOUND_ONLY", "UNCONFIGURED", "OFFLINE"
+    # "READY", "ASSUMED_READY", "SOCKET_BOUND_ONLY", "BOUND_ELSEWHERE",
+    # "UNCONFIGURED", "OFFLINE"
+    status: str
     message: str
     details: dict[str, Any]
+
+
+def extract_json_path(data: Any, path: str) -> list[Any]:
+    """Read a dotted path out of parsed JSON. `a.b[].c` maps over the list at b."""
+    values: list[Any] = [data]
+
+    for part in path.split("."):
+        collected: list[Any] = []
+        is_list = part.endswith("[]")
+        key = part[:-2] if is_list else part
+
+        for value in values:
+            if not isinstance(value, dict) or key not in value:
+                continue
+            found = value[key]
+            if is_list and isinstance(found, list):
+                collected.extend(found)
+            else:
+                collected.append(found)
+
+        values = collected
+
+    return values
+
+
+def _same_location(a: str, b: str) -> bool:
+    try:
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    except Exception:
+        return os.path.normcase(str(a).rstrip("\\/")) == os.path.normcase(str(b).rstrip("\\/"))
+
+
+def check_arm_binding(arm: ArmConfig, stdout: str, workspace_root: Path | None) -> ArmHealthResult | None:
+    """Fail an otherwise-healthy arm that is serving a different project.
+
+    Liveness is not the same claim as relevance: an arm registered at user
+    scope against another project answers every health check truthfully while
+    being useless to this workspace. Returns None when the arm is correctly
+    bound or the check does not apply.
+    """
+    if not arm.binding_path or not workspace_root:
+        return None
+
+    try:
+        payload = json.loads(stdout)
+    except Exception:
+        return None
+
+    bound_to = [str(v) for v in extract_json_path(payload, arm.binding_path) if isinstance(v, str)]
+    if not bound_to:
+        return None
+
+    if any(_same_location(p, str(workspace_root)) for p in bound_to):
+        return None
+
+    return ArmHealthResult(
+        arm.id,
+        arm.name,
+        "BOUND_ELSEWHERE",
+        f"P4 Warning: live but serving {', '.join(bound_to)} — not this workspace ({workspace_root}).",
+        {"bound_to": bound_to, "workspace_root": str(workspace_root)},
+    )
 
 
 def resolve_probe_binary(arm: ArmConfig) -> str:
@@ -47,7 +111,7 @@ def resolve_probe_binary(arm: ArmConfig) -> str:
     return arm.command or arm.mcp_server or arm.id
 
 
-def probe_cli_arm(arm: ArmConfig) -> ArmHealthResult:
+def probe_cli_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHealthResult:
     cmd_name = resolve_probe_binary(arm)
     executable = shutil.which(cmd_name)
 
@@ -66,6 +130,9 @@ def probe_cli_arm(arm: ArmConfig) -> ArmHealthResult:
                 timeout=3,
             )
             if res.returncode in (0, 255):
+                misbound = check_arm_binding(arm, res.stdout, workspace_root)
+                if misbound:
+                    return misbound
                 return ArmHealthResult(
                     arm.id, arm.name, "READY", f"Health check command '{arm.health_check}' active and responding.", {"stdout": res.stdout[:200]}
                 )
@@ -175,7 +242,7 @@ def probe_stdio_mcp_arm(arm: ArmConfig) -> ArmHealthResult:
     )
 
 
-def probe_mcp_arm(arm: ArmConfig) -> ArmHealthResult:
+def probe_mcp_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHealthResult:
     hc = (arm.health_check or "").strip()
 
     # 1. If health_check is an HTTP URL, probe HTTP
@@ -208,27 +275,20 @@ def probe_mcp_arm(arm: ArmConfig) -> ArmHealthResult:
 
     # 2. If health_check is a non-HTTP shell command (e.g. "unity status --json"), run command probe!
     if hc:
-        return probe_cli_arm(arm)
+        return probe_cli_arm(arm, workspace_root)
 
     # 3. Default Stdio MCP probe
     return probe_stdio_mcp_arm(arm)
 
 
-def doctor_check_arm(arm: ArmConfig) -> ArmHealthResult:
-    if arm.type == "cli":
-        return probe_cli_arm(arm)
-    elif arm.type == "mcp":
-        return probe_mcp_arm(arm)
-    else:
-        return probe_cli_arm(arm)
+def doctor_check_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHealthResult:
+    if arm.type == "mcp":
+        return probe_mcp_arm(arm, workspace_root)
+    return probe_cli_arm(arm, workspace_root)
 
 
 def run_doctor(config: CocktailConfig) -> list[ArmHealthResult]:
-    results = []
-    for arm in config.arms:
-        res = doctor_check_arm(arm)
-        results.append(res)
-    return results
+    return [doctor_check_arm(arm, config.root_dir) for arm in config.arms]
 
 
 def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) -> None:
@@ -260,6 +320,8 @@ def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) 
             status_str = "[READY]" if r.status == "READY" else "[ASSUMED_READY]"
         elif r.status == "SOCKET_BOUND_ONLY":
             status_str = "[BOUND_ONLY (P4)]"
+        elif r.status == "BOUND_ELSEWHERE":
+            status_str = "[WRONG_PROJECT (P4)]"
         elif r.status == "UNCONFIGURED":
             status_str = "[UNCONFIGURED]"
         else:

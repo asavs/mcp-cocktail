@@ -1,9 +1,17 @@
 """Tests for mcp_cocktail.doctor module."""
 
+import json
 from pathlib import Path
 
 from mcp_cocktail.config import CocktailConfig, ArmConfig
-from mcp_cocktail.doctor import run_doctor, probe_cli_arm, probe_mcp_arm, resolve_probe_binary
+from mcp_cocktail.doctor import (
+    check_arm_binding,
+    extract_json_path,
+    run_doctor,
+    probe_cli_arm,
+    probe_mcp_arm,
+    resolve_probe_binary,
+)
 
 PRESETS_DIR = Path(__file__).resolve().parents[1] / "examples"
 
@@ -74,6 +82,49 @@ def test_probe_binary_comes_from_the_health_check_not_the_arm_identity():
     http_arm = ArmConfig(id="coplay-mcp", name="Coplay", type="mcp", mcp_server="UnityMCP",
                          health_check="http://127.0.0.1:8080/mcp")
     assert resolve_probe_binary(http_arm) == "UnityMCP"
+
+
+UNITY_STATUS = json.dumps({
+    "success": True,
+    "data": {"count": 1, "instances": [
+        {"port": 7800, "project": r"C:\work\gabe", "version": "6000.5.5f1", "pid": 1416, "state": "ready"}
+    ]},
+})
+
+
+def test_extract_json_path_maps_over_lists():
+    payload = json.loads(UNITY_STATUS)
+    assert extract_json_path(payload, "data.instances[].project") == [r"C:\work\gabe"]
+    assert extract_json_path(payload, "data.instances[].port") == [7800]
+    assert extract_json_path(payload, "data.nope[].project") == []
+
+
+def test_binding_check_flags_an_arm_serving_another_project(tmp_path):
+    """Field log Finding 3: the MCP arm was registered at user scope against
+    HelloUnity while all work was in gabe, and every liveness check said
+    'Connected'. Bound is not the same claim as bound to your thing."""
+    arm = ArmConfig(id="unity", name="Unity", type="cli", command="unity",
+                    health_check="unity status --json",
+                    binding_path="data.instances[].project")
+
+    elsewhere = check_arm_binding(arm, UNITY_STATUS, tmp_path / "other-project")
+    assert elsewhere is not None
+    assert elsewhere.status == "BOUND_ELSEWHERE"
+    assert r"C:\work\gabe" in elsewhere.message
+
+    # Correctly bound -> no complaint.
+    assert check_arm_binding(arm, UNITY_STATUS, Path(r"C:\work\gabe")) is None
+
+    # No binding_path declared, or unparseable output -> check does not apply.
+    silent = ArmConfig(id="unity", name="Unity", type="cli", health_check="unity status --json")
+    assert check_arm_binding(silent, UNITY_STATUS, tmp_path) is None
+    assert check_arm_binding(arm, "not json", tmp_path) is None
+
+
+def test_unity_preset_declares_a_binding_for_project_scoped_arms():
+    arms = {a.id: a for a in CocktailConfig.load(PRESETS_DIR / "unity" / ".agents" / "manifest.json").arms}
+    for arm_id in ("official-unity-cli", "official-unity-mcp"):
+        assert arms[arm_id].binding_path == "data.instances[].project"
 
 
 def test_shipped_presets_state_urls_bare():

@@ -11,7 +11,8 @@
       "env": {
         "MSYS_NO_PATHCONV": "1"
       },
-      "health_check": "unity status --json"
+      "health_check": "unity status --json",
+      "binding_path": "data.instances[].project"
     },
     {
       "id": "official-unity-mcp",
@@ -19,7 +20,8 @@
       "type": "mcp",
       "mcp_server": "unity-editor-mcp",
       "tool_prefix": "mcp__unity-editor-mcp__",
-      "health_check": "unity status --json"
+      "health_check": "unity status --json",
+      "binding_path": "data.instances[].project"
     },
     {
       "id": "coplay-mcp",

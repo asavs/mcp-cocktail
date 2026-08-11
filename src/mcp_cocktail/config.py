@@ -22,6 +22,10 @@ class ArmConfig:
     env: dict[str, str] = field(default_factory=dict)
     setup_script: str | None = None
     health_check: str | None = None
+    # Dotted path into the health check's JSON stdout naming the project each
+    # live instance is serving, e.g. "data.instances[].project". Lets doctor
+    # distinguish "bound" from "bound to *this* workspace".
+    binding_path: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -29,7 +33,7 @@ class ArmConfig:
         known = {
             "id", "name", "type", "command", "mcp_server",
             "tool_prefix", "description", "capabilities", "env",
-            "setup_script", "health_check"
+            "setup_script", "health_check", "binding_path"
         }
         extra = {k: v for k, v in data.items() if k not in known}
         caps = data.get("capabilities", [])
@@ -48,6 +52,7 @@ class ArmConfig:
             env=data.get("env", {}),
             setup_script=data.get("setup_script"),
             health_check=data.get("health_check"),
+            binding_path=data.get("binding_path"),
             extra=extra,
         )
 
