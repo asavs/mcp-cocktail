@@ -1,6 +1,7 @@
 """Tests for mcp_cocktail.installer module."""
 
 import json
+import os
 from pathlib import Path
 import re
 
@@ -262,6 +263,14 @@ def test_install_and_uninstall_hook(tmp_path: Path):
     assert len(data3["hooks"]["PreToolUse"]) == 0
 
 
+def _clear_harness_env(monkeypatch):
+    """Drop every harness signal so a test asserts on what it sets, not on the
+    machine it runs on."""
+    for name in list(os.environ):
+        if name.startswith("CODEX_") or name in ("OMP_SESSION_ID", "OMP_DIR", "CLAUDE_SESSION_ID"):
+            monkeypatch.delenv(name, raising=False)
+
+
 def test_detect_current_active_harness(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("OMP_SESSION_ID", "sess_123")
     assert detect_current_active_harness(tmp_path) == "omp"
@@ -269,3 +278,83 @@ def test_detect_current_active_harness(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("OMP_SESSION_ID", raising=False)
     monkeypatch.setenv("CLAUDE_SESSION_ID", "sess_456")
     assert detect_current_active_harness(tmp_path) == "claude"
+
+
+def test_codex_session_is_not_detected_as_claude(tmp_path: Path, monkeypatch):
+    """Field report: `setup` run inside a Codex session auto-selected Claude
+    and wrote .claude/settings.json -- a guardrail the running harness will
+    never invoke, reported as installed."""
+    _clear_harness_env(monkeypatch)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    assert detect_current_active_harness(tmp_path) == "codex"
+
+
+def test_a_live_claude_session_outranks_codex_config_on_the_machine(tmp_path: Path, monkeypatch):
+    """A machine that has run several harnesses keeps all their config
+    forever; only one of them is executing. The session id is the fact about
+    now, so it has to win."""
+    _clear_harness_env(monkeypatch)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "sess_456")
+    assert detect_current_active_harness(tmp_path) == "claude"
+
+
+def test_codex_workspace_directory_is_detected(tmp_path: Path, monkeypatch):
+    _clear_harness_env(monkeypatch)
+    (tmp_path / ".codex").mkdir()
+    assert detect_current_active_harness(tmp_path) == "codex"
+
+    # ...but a Claude workspace in the same tree still wins, matching the
+    # existing .omp/.claude precedence.
+    (tmp_path / ".claude").mkdir()
+    assert detect_current_active_harness(tmp_path) == "claude"
+
+
+def test_installing_for_codex_writes_nothing_and_says_why(tmp_path: Path, monkeypatch):
+    """Refusing loudly beats a silent fallback. The failure mode being closed
+    is the one the field log named twice: a configured hook, a passing
+    selftest, and zero protection."""
+    _clear_harness_env(monkeypatch)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    monkeypatch.chdir(tmp_path)
+
+    ok, msg = install_hook(harness="auto")
+
+    assert ok is False
+    assert not (tmp_path / ".claude").exists(), "wrote a Claude hook during a Codex session"
+    assert "Nothing was written" in msg
+    assert "mcp_servers" in msg, "the message must name the route that does work"
+    assert "--harness claude" in msg
+
+
+def test_uninstalling_for_codex_does_not_strip_another_harness(tmp_path: Path, monkeypatch):
+    """get_harness_settings_path falls through to .claude for unknown names,
+    so an unguarded codex uninstall would remove a Claude hook and report it
+    as Codex's."""
+    _clear_harness_env(monkeypatch)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    monkeypatch.chdir(tmp_path)
+
+    settings = tmp_path / ".claude" / "settings.json"
+    install_hook(harness="claude", target_path=str(settings))
+    before = settings.read_text(encoding="utf-8")
+
+    ok, msg = uninstall_hook(harness="auto")
+
+    assert ok is False
+    assert settings.read_text(encoding="utf-8") == before
+    assert "Nothing was removed" in msg
+
+
+def test_explicit_settings_path_still_overrides_the_codex_refusal(tmp_path: Path, monkeypatch):
+    """--settings names a destination outright; the refusal exists to stop a
+    silent *guess*, not to override an instruction."""
+    _clear_harness_env(monkeypatch)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    monkeypatch.chdir(tmp_path)
+
+    target = tmp_path / "explicit" / "settings.json"
+    ok, _ = install_hook(harness="auto", target_path=str(target))
+
+    assert ok is True
+    assert target.exists()

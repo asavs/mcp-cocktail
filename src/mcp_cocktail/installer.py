@@ -63,9 +63,13 @@ def detect_domain_preset(target_dir: Path | str | None = None) -> str:
 def detect_current_active_harness(target_dir: Path | str | None = None) -> str:
     """Detect the specific agent harness executing right now or configured in workspace.
 
-    Checks environment variables (CLAUDE_SESSION_ID, OMP_SESSION_ID) and existing
-    local workspace directories (.claude, .omp, mcp.json).
+    Checks environment variables (CLAUDE_SESSION_ID, OMP_SESSION_ID, CODEX_*)
+    and existing local workspace directories (.claude, .omp, .codex, mcp.json).
     NEVER creates config directories for inactive harnesses.
+
+    Ordering is deliberate: a variable naming a *live session* outranks any
+    directory on disk, because a machine that has run several harnesses keeps
+    all their config directories forever and only one of them is running now.
     """
     root = Path(target_dir) if target_dir else Path.cwd()
 
@@ -74,18 +78,29 @@ def detect_current_active_harness(target_dir: Path | str | None = None) -> str:
         return "omp"
     if os.environ.get("CLAUDE_SESSION_ID"):
         return "claude"
+    # Codex exports no single stable session id, so match the namespace it
+    # does export (CODEX_HOME, CODEX_SANDBOX, ...). Checked after the two
+    # session-id probes above so an actively running Claude or OMP session on
+    # a machine that also has Codex installed still resolves to what is
+    # actually executing.
+    if any(name.startswith("CODEX_") for name in os.environ):
+        return "codex"
 
     # 2. Existing local workspace directory detection
     if (root / ".omp").exists():
         return "omp"
     if (root / ".claude").exists():
         return "claude"
+    if (root / ".codex").exists():
+        return "codex"
     if (root / "mcp.json").exists():
         return "mcp"
 
     # 3. User home folder presence
     if Path(os.path.expanduser("~/.omp")).exists() and not Path(os.path.expanduser("~/.claude")).exists():
         return "omp"
+    if Path(os.path.expanduser("~/.codex")).exists() and not Path(os.path.expanduser("~/.claude")).exists():
+        return "codex"
 
     return "claude"
 
@@ -227,9 +242,29 @@ def install_hook_for_harness(
     custom_traps: str | None = None,
     matcher: str = DEFAULT_HOOK_MATCHER,
 ) -> tuple[bool, str]:
+    h_clean = harness.lower().strip()
+
+    # Codex has no PreToolUse equivalent to write into. Silently falling back
+    # to .claude/settings.json -- which is what "auto" used to do here --
+    # installs a guardrail that the running harness will never invoke, and
+    # then reports success: a configured hook, a passing selftest, and zero
+    # protection. Say what cannot be done, and name the route that works,
+    # since Codex does read MCP servers from its own config.
+    if h_clean == "codex" and not target_path:
+        return False, (
+            "Codex exposes no PreToolUse hook, so mcp-cocktail cannot install a guardrail "
+            "for it. Nothing was written.\n"
+            "  - To expose cocktail's tools to Codex instead, add it as an MCP server:\n"
+            "      [mcp_servers.mcp-cocktail]\n"
+            '      command = "mcp-cocktail"\n'
+            '      args = ["serve"]\n'
+            "    in ~/.codex/config.toml.\n"
+            "  - To install the guardrail for a Claude Code session in this workspace "
+            "anyway, re-run with --harness claude."
+        )
+
     path = get_harness_settings_path(harness, global_settings, target_path)
     data = load_json_file(path)
-    h_clean = harness.lower().strip()
 
     if h_clean == "mcp":
         mcp_servers = data.setdefault("mcpServers", {})
@@ -305,6 +340,16 @@ def uninstall_hook(
     target_path: str | None = None,
 ) -> tuple[bool, str]:
     target_harness = detect_current_active_harness() if (not harness or harness.lower().strip() == "auto") else harness
+
+    # Nothing is ever installed for Codex, so nothing can be removed for it.
+    # Falling through would resolve to .claude/settings.json and strip a
+    # different harness's hook while reporting it as Codex's.
+    if target_harness.lower().strip() == "codex" and not target_path:
+        return False, (
+            "No mcp-cocktail hook is installed for Codex (it exposes no PreToolUse hook). "
+            "Nothing was removed. Use --harness claude to target a Claude Code workspace."
+        )
+
     path = get_harness_settings_path(target_harness, global_settings, target_path)
 
     if not path.exists():

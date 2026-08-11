@@ -148,7 +148,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if skipped:
         print(f"Kept {len(skipped)} existing file(s) in {dst_tools}: {', '.join(skipped)}")
 
-    ok, msg = install_hook(
+    hook_installed, msg = install_hook(
         harness=args.harness,
         global_settings=args.global_settings,
         target_path=args.settings,
@@ -187,8 +187,12 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print("         least one arm above, then re-run `mcp-cocktail doctor`.")
         return 1
 
+    # The arms can be healthy while the guardrail was never installed. Saying
+    # "complete" without qualifying that would repeat, one scope down, the
+    # thing this command was just taught not to do.
+    guardrail = "guardrail installed" if hook_installed else "NO guardrail installed — see above"
     print(f"\n[OK] mcp-cocktail setup complete for '{preset}' domain "
-          f"({len(ready)}/{len(doc_results)} arms READY).")
+          f"({len(ready)}/{len(doc_results)} arms READY, {guardrail}).")
     return 0
 
 
@@ -412,7 +416,7 @@ def main(argv: list[str] | None = None) -> int:
         default="unity",
         help=f"Domain preset name (default: unity). Shipped: {', '.join(available_presets()) or '(none)'}",
     )
-    p_setup.add_argument("--harness", default="auto", help="Target harness (claude, omp, mcp, auto)")
+    p_setup.add_argument("--harness", default="auto", help="Target harness (claude, omp, mcp, codex, auto)")
     p_setup.add_argument("--global", dest="global_settings", action="store_true", help="Target global settings")
     p_setup.add_argument("--settings", help="Explicit path to settings.json")
 
@@ -443,7 +447,7 @@ def main(argv: list[str] | None = None) -> int:
     p_proxy.add_argument("target_cmd", nargs=argparse.REMAINDER, help="Target MCP server executable and arguments")
 
     p_hook = subparsers.add_parser("install-hook", help="Install PreToolUse hook into harness configuration")
-    p_hook.add_argument("--harness", default="auto", help="Target harness (claude, omp, mcp, auto)")
+    p_hook.add_argument("--harness", default="auto", help="Target harness (claude, omp, mcp, codex, auto)")
     p_hook.add_argument("--global", dest="global_settings", action="store_true", help="Target global settings")
     p_hook.add_argument("--settings", help="Explicit path to settings.json")
     p_hook.add_argument("--traps", help="Custom traps.json path for hook")
