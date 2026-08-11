@@ -18,6 +18,7 @@ from mcp_cocktail.discover import (
     merge_manifests,
 )
 from mcp_cocktail.doctor import (
+    READY_STATUSES,
     evaluate_requirements,
     missing_setup_script,
     print_doctor_report,
@@ -173,7 +174,21 @@ def cmd_setup(args: argparse.Namespace) -> int:
     for arm_id, absent in unstartable:
         print(f"[WARN] {arm_id}: setup script not provisioned at {absent} — that arm cannot be started.")
 
-    print(f"\n[OK] mcp-cocktail setup complete for '{preset}' domain!")
+    # Copying files is not the outcome anyone ran setup for. Reporting [OK]
+    # over a doctor table reading 0/11 READY is the exact green light this
+    # tool exists to catch: every visible step succeeded and nothing usable
+    # came of it. Grade on the arms, and say which part did work, so the
+    # provisioning that did land is not mistaken for a total failure.
+    ready = [r for r in doc_results if r.status in READY_STATUSES]
+    if not ready:
+        print(f"\n[FAILED] setup provisioned '{preset}', but 0/{len(doc_results)} arms are READY.")
+        print("         The workspace files are in place; no arm is running or installed,")
+        print("         so there is nothing for an agent to call yet. Start or install at")
+        print("         least one arm above, then re-run `mcp-cocktail doctor`.")
+        return 1
+
+    print(f"\n[OK] mcp-cocktail setup complete for '{preset}' domain "
+          f"({len(ready)}/{len(doc_results)} arms READY).")
     return 0
 
 
