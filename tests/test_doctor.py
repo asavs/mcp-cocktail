@@ -17,6 +17,7 @@ from mcp_cocktail.doctor import (
     probe_cli_arm,
     probe_mcp_arm,
     resolve_probe_binary,
+    summarize_failure,
 )
 
 PRESETS_DIR = Path(__file__).resolve().parents[1] / "examples"
@@ -88,6 +89,29 @@ def test_probe_binary_comes_from_the_health_check_not_the_arm_identity():
     http_arm = ArmConfig(id="coplay-mcp", name="Coplay", type="mcp", mcp_server="UnityMCP",
                          health_check="http://127.0.0.1:8080/mcp")
     assert resolve_probe_binary(http_arm) == "UnityMCP"
+
+
+def test_failure_summary_reads_json_error_envelopes():
+    """`unity status --json` with no Editor exits 6 and explains exactly what
+    to do -- but the first line of its pretty-printed body is "{"."""
+    unity_no_instances = json.dumps({
+        "success": False,
+        "data": {"count": 0, "instances": []},
+        "errors": [{"code": "STATUS_NO_INSTANCES",
+                    "message": "No Unity Editor instances found with the Pipeline package installed."}],
+    }, indent=2)
+
+    assert "No Unity Editor instances found" in summarize_failure(unity_no_instances, "")
+
+    # Other common envelope shapes.
+    assert summarize_failure(json.dumps({"error": "boom"}), "") == "boom"
+    assert summarize_failure(json.dumps({"message": "nope"}), "") == "nope"
+
+    # stderr wins when present; plain text still works; nothing degrades safely.
+    assert summarize_failure("{...}", "real stderr line") == "real stderr line"
+    assert summarize_failure("plain failure text", "") == "plain failure text"
+    assert summarize_failure("", "") == "no output"
+    assert summarize_failure("{\n}\n", "") == "no output"
 
 
 def test_probe_binary_honours_quoted_paths():

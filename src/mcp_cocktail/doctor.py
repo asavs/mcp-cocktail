@@ -95,6 +95,47 @@ def check_arm_binding(arm: ArmConfig, stdout: str, workspace_root: Path | None) 
     )
 
 
+def summarize_failure(stdout: str, stderr: str) -> str:
+    """Best available one-line reason a health check failed.
+
+    Taking the first line of stdout blindly yields "{" for the many CLIs that
+    emit a pretty-printed JSON envelope, discarding the actionable message
+    inside it -- `unity status --json` explains exactly what to do, on a line
+    the naive reader never reaches.
+    """
+    if stderr.strip():
+        return stderr.strip().splitlines()[0][:160]
+
+    try:
+        payload = json.loads(stdout)
+    except Exception:
+        payload = None
+
+    if isinstance(payload, dict):
+        messages: list[str] = []
+        errors = payload.get("errors")
+        if isinstance(errors, list):
+            for item in errors:
+                if isinstance(item, dict) and item.get("message"):
+                    messages.append(str(item["message"]))
+                elif isinstance(item, str):
+                    messages.append(item)
+
+        for key in ("error", "message", "detail"):
+            value = payload.get(key)
+            if not messages and isinstance(value, str) and value.strip():
+                messages.append(value.strip())
+
+        if messages:
+            return " ".join(messages)[:160]
+
+    for line in stdout.splitlines():
+        if line.strip() not in ("", "{", "}", "[", "]"):
+            return line.strip()[:160]
+
+    return "no output"
+
+
 def first_command_token(command: str) -> str:
     """Extract the executable from a shell command, honouring quotes.
 
@@ -159,7 +200,7 @@ def probe_cli_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHeal
             # A health check that ran and failed is a verdict, not a missing
             # verdict. Falling through to "executable found in PATH" would
             # green-light a dead arm on the strength of its binary existing.
-            detail = (res.stderr.strip() or res.stdout.strip() or "no output").splitlines()[0][:120]
+            detail = summarize_failure(res.stdout, res.stderr)
             return ArmHealthResult(
                 arm.id,
                 arm.name,
