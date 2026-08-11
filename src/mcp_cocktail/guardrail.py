@@ -35,6 +35,9 @@ def split_segments(command: str) -> list[str]:
         elif char in ('"', "'"):
             in_quote = char
             curr.append(char)
+        elif char == "&" and curr and curr[-1] == ">":
+            # File-descriptor duplication (`2>&1`), not a command separator.
+            curr.append(char)
         elif char in (";", "|", "&"):
             if curr:
                 seg = "".join(curr).strip()
@@ -52,8 +55,34 @@ def split_segments(command: str) -> list[str]:
     return segments
 
 
+def has_write_redirect(command: str) -> bool:
+    """True when the command redirects output into a file.
+
+    Scanned over the whole command rather than per-segment, because
+    `split_segments` breaks on `&` and would tear `2>&1` in half. Quoted `>`
+    is literal text; `>&` duplicates a file descriptor and writes nothing;
+    `<` only reads.
+    """
+    in_quote = None
+
+    for i, char in enumerate(command):
+        if in_quote:
+            if char == in_quote:
+                in_quote = None
+        elif char in ('"', "'"):
+            in_quote = char
+        elif char == ">":
+            rest = command[i + 1:].lstrip(">")
+            if not rest.startswith("&"):
+                return True
+
+    return False
+
+
 def is_read_only(command: str) -> bool:
     """True when every segment of a shell command merely inspects."""
+    if has_write_redirect(command):
+        return False
     segments = split_segments(command)
     return bool(segments) and all(READ_VERB.match(s) for s in segments)
 

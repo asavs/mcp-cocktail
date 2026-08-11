@@ -6,6 +6,7 @@ import json
 from mcp_cocktail.config import TrapRule, TrapsConfig
 from mcp_cocktail.guardrail import (
     build_hook_output,
+    has_write_redirect,
     split_segments,
     is_read_only,
     evaluate_rules,
@@ -26,6 +27,21 @@ def test_is_read_only():
     assert is_read_only("cat file.txt | head -10")
     assert not is_read_only("rm -rf /")
     assert not is_read_only("unity command --delete")
+
+
+def test_redirect_is_not_read_only():
+    # A read verb plus a redirect is a write; read_only_ignore must not skip it.
+    assert not is_read_only('echo "x" > Packages/manifest.json')
+    assert not is_read_only("cat template.json >> Packages/manifest.json")
+    assert not is_read_only("type a.txt > b.txt")
+
+
+def test_redirect_detection_ignores_quotes_and_fd_dups():
+    assert is_read_only("git status 2>&1")
+    assert is_read_only('grep ">" manifest.json')
+    assert is_read_only("cat a.txt")
+    assert not has_write_redirect("git log --format=%H")
+    assert has_write_redirect("ls > out.txt")
 
 
 def test_evaluate_rules_cooldown():
