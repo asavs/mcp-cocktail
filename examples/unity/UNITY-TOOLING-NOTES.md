@@ -1168,7 +1168,7 @@ occurred. Whatever that pref governs, it is not this.
 
 So the corrected position on arm C, **fourth revision in one day and the first one confirmed
 by a working call**: it is not GUI-gated at all. Server start and Editor registration are both
-scriptable, in that order, and `tools/trials/three-way-setup.sh` now does both. The three
+scriptable, in that order, and `tools/three-way-setup.sh` now does both. The three
 previous revisions each failed the same way — they concluded from a status signal (a bare
 port, a `Connected` row, an `instance_count`) instead of from a call that had to traverse the
 whole path. **The only trustworthy check of a transport is a message that had to cross it.**

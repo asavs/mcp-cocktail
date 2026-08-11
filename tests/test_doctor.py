@@ -7,6 +7,7 @@ from mcp_cocktail.config import CocktailConfig, ArmConfig
 from mcp_cocktail.doctor import (
     check_arm_binding,
     extract_json_path,
+    doctor_check_arm,
     run_doctor,
     probe_cli_arm,
     probe_mcp_arm,
@@ -125,6 +126,35 @@ def test_unity_preset_declares_a_binding_for_project_scoped_arms():
     arms = {a.id: a for a in CocktailConfig.load(PRESETS_DIR / "unity" / ".agents" / "manifest.json").arms}
     for arm_id in ("official-unity-cli", "official-unity-mcp"):
         assert arms[arm_id].binding_path == "data.instances[].project"
+
+
+def test_unreachable_arm_with_a_missing_setup_script_is_unconfigured(tmp_path):
+    """Field log Finding 8: coplay-mcp is a standalone server nothing in the
+    stack starts, and its setup_script path did not resolve -- but the PATH
+    gate short-circuited before setup_script was ever looked at, so the
+    documented UNCONFIGURED status was unreachable for the arm it describes."""
+    arm = ArmConfig(id="coplay-mcp", name="Coplay", type="mcp", mcp_server="UnityMCP",
+                    health_check="http://127.0.0.1:59999/mcp",
+                    setup_script="tools/three-way-setup.sh")
+
+    res = doctor_check_arm(arm, workspace_root=tmp_path)
+    assert res.status == "UNCONFIGURED"
+    assert "cannot be started" in res.message
+
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "three-way-setup.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    assert doctor_check_arm(arm, workspace_root=tmp_path).status == "OFFLINE"
+
+
+def test_preset_setup_script_resolves_after_setup():
+    """setup copies <preset>/tools -> <workspace>/tools, so a setup_script
+    declared as tools/... must exist at that path inside the preset."""
+    preset_root = PRESETS_DIR / "unity"
+    for arm in CocktailConfig.load(preset_root / ".agents" / "manifest.json").arms:
+        if arm.setup_script:
+            assert (preset_root / arm.setup_script).exists(), (
+                f"{arm.id}: setup_script '{arm.setup_script}' not present in the preset"
+            )
 
 
 def test_shipped_presets_state_urls_bare():

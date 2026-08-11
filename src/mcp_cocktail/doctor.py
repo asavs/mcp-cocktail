@@ -281,10 +281,37 @@ def probe_mcp_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHeal
     return probe_stdio_mcp_arm(arm)
 
 
+def missing_setup_script(arm: ArmConfig, workspace_root: Path | None) -> Path | None:
+    """Path of the arm's declared setup script when it is not on disk."""
+    if not arm.setup_script:
+        return None
+
+    candidate = Path(arm.setup_script)
+    if not candidate.is_absolute():
+        candidate = (workspace_root or Path.cwd()) / candidate
+
+    return None if candidate.exists() else candidate
+
+
 def doctor_check_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHealthResult:
-    if arm.type == "mcp":
-        return probe_mcp_arm(arm, workspace_root)
-    return probe_cli_arm(arm, workspace_root)
+    result = probe_mcp_arm(arm, workspace_root) if arm.type == "mcp" else probe_cli_arm(arm, workspace_root)
+
+    # An arm that is down *and* has no way to be brought up is unconfigured,
+    # not merely offline. Checked after probing, because a running arm does not
+    # care whether its setup script survived.
+    if result.status == "OFFLINE":
+        absent = missing_setup_script(arm, workspace_root)
+        if absent:
+            return ArmHealthResult(
+                arm.id,
+                arm.name,
+                "UNCONFIGURED",
+                f"{result.message} Setup script '{arm.setup_script}' is missing ({absent}), "
+                f"so this arm cannot be started.",
+                {**result.details, "missing_setup_script": str(absent)},
+            )
+
+    return result
 
 
 def run_doctor(config: CocktailConfig) -> list[ArmHealthResult]:

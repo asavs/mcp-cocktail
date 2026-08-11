@@ -1,7 +1,7 @@
 # Trial brief — one arm, one agent, written blind
 
 Hand this to a subagent, one per arm, **serially**. Substitute `<ARM>` and the arm-specific
-block. Run `tools/trials/three-way-setup.sh` first, in the session that spawns them; arm C's
+block. Run `tools/three-way-setup.sh` first, in the session that spawns them; arm C's
 tools are absent from any session that started while its server was down.
 
 ## Why serial
