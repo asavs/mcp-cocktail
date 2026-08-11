@@ -23,6 +23,36 @@ READ_VERB = re.compile(
 
 TARGET_KEYS = ("command", "file_path", "path", "code")
 
+# Commands whose quoted arguments are prose to be recorded, not operands to be
+# acted on. A trap describes a filesystem effect; writing *about* the trap has
+# none, so the quoted payload must not be scanned for trap patterns.
+ANNOTATION_VERB = re.compile(
+    r"^(?:mcp-?cocktail\s+(?:note|upstream)"
+    r"|git\s+commit"
+    r"|gh\s+(?:issue|pr)\s+(?:create|comment)"
+    r"|echo)\b",
+    re.I,
+)
+
+QUOTED_LITERAL = re.compile(r"'[^']*'|\"[^\"]*\"")
+
+
+def strip_annotation_payloads(command: str) -> str:
+    """Blank the quoted prose of annotation commands before rule matching.
+
+    `mcp-cocktail note "... Packages/manifest.json ..."` tripped the
+    manifest-while-running trap: filing a finding about a trap sprung it.
+    Unquoted text is untouched, so `echo x > Packages/manifest.json` still
+    matches on the redirect target.
+    """
+    segments = split_segments(command)
+    if not any(ANNOTATION_VERB.match(s) for s in segments):
+        return command  # overwhelmingly the common case; leave it byte-identical
+
+    return "\n".join(
+        QUOTED_LITERAL.sub(" ", s) if ANNOTATION_VERB.match(s) else s for s in segments
+    )
+
 
 def split_segments(command: str) -> list[str]:
     """Split shell command on `&&`, `||`, `|`, `;` respecting string quotes."""
@@ -115,13 +145,21 @@ def is_read_only(command: str) -> bool:
     return bool(segments) and all(READ_VERB.match(s) for s in segments)
 
 
-def get_command_text(tool_input: dict[str, Any]) -> str:
-    """Extract string payload across relevant target input keys."""
+def get_command_text(tool_input: dict[str, Any], sanitize: bool = False) -> str:
+    """Extract string payload across relevant target input keys.
+
+    With `sanitize`, annotation prose is blanked — use that for rule matching.
+    Read-only classification must use the raw text, since the shell still runs
+    what the quotes contain.
+    """
     parts = []
     for key in TARGET_KEYS:
         val = tool_input.get(key)
         if isinstance(val, str) and val.strip():
-            parts.append(val.strip())
+            text = val.strip()
+            if sanitize and key == "command":
+                text = strip_annotation_payloads(text)
+            parts.append(text)
     return "\n".join(parts)
 
 
@@ -136,17 +174,18 @@ def evaluate_rules(
     if now is None:
         now = time.time()
 
-    cmd_text = get_command_text(tool_input)
+    raw_text = get_command_text(tool_input)
+    match_text = get_command_text(tool_input, sanitize=True)
     messages = []
 
     for rule in traps.rules:
         if rule.tool_matcher and not re.search(rule.tool_matcher, tool_name, re.I):
             continue
 
-        if rule.target_matcher and not re.search(rule.target_matcher, cmd_text, re.I):
+        if rule.target_matcher and not re.search(rule.target_matcher, match_text, re.I):
             continue
 
-        if rule.read_only_ignore and is_read_only(cmd_text):
+        if rule.read_only_ignore and is_read_only(raw_text):
             continue
 
         last_fired = state.get(rule.id, 0.0)

@@ -7,6 +7,7 @@ from pathlib import Path
 from mcp_cocktail.config import TrapRule, TrapsConfig
 from mcp_cocktail.guardrail import (
     build_hook_output,
+    get_command_text,
     has_write_redirect,
     split_segments,
     is_read_only,
@@ -90,6 +91,42 @@ def test_evaluate_rules_cooldown():
 
     hits3 = evaluate_rules("Bash", {"command": "run_test"}, traps, state, now + 70.0)
     assert len(hits3) == 1
+
+
+def test_annotation_prose_does_not_spring_the_trap_it_describes(tmp_path):
+    """Field log Finding 10: filing a note about a trap sprung that trap."""
+    traps = TrapsConfig(
+        version="1.0",
+        domain="unity",
+        rules=[
+            TrapRule(
+                id="manifest-while-running",
+                message="P1 manifest trap",
+                tool_matcher="^(Bash|PowerShell|Edit|Write)$",
+                target_matcher=r"Packages[\\/]manifest\.json",
+                read_only_ignore=True,
+            )
+        ],
+    )
+
+    describing = {"command": 'mcp-cocktail note "tried \'grep X Packages/manifest.json\' and it fired"'}
+    assert evaluate_rules("Bash", describing, traps, {}, 1000.0) == []
+
+    committing = {"command": 'git commit -m "fix: honour Packages/manifest.json reload"'}
+    assert evaluate_rules("Bash", committing, traps, {}, 1000.0) == []
+
+    # Doing the thing still fires — including the unquoted redirect target.
+    for doing in (
+        {"command": "echo '{}' > Packages/manifest.json"},
+        {"command": "cp new.json Packages/manifest.json"},
+        {"file_path": "Packages/manifest.json"},
+    ):
+        assert evaluate_rules("Write", doing, traps, {}, 1000.0), doing
+
+
+def test_sanitizing_leaves_ordinary_commands_untouched():
+    tool_input = {"command": "unity open && unity pipeline list"}
+    assert get_command_text(tool_input, sanitize=True) == get_command_text(tool_input)
 
 
 def test_guardrail_selftest():
