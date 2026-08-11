@@ -63,6 +63,67 @@ def _same_location(a: str, b: str) -> bool:
         return os.path.normcase(str(a).rstrip("\\/")) == os.path.normcase(str(b).rstrip("\\/"))
 
 
+MAX_REPORTED_FIELDS = 6
+
+
+def binding_instances(arm: ArmConfig, stdout: str) -> tuple[str, list[dict[str, Any]]]:
+    """Split an arm's binding_path into (leaf key, the objects carrying it).
+
+    `data.instances[].project` names a leaf; its parent is the instance object
+    the health check is describing. Reading the parent gives every fact the
+    tool already reports about itself -- port, pid, version -- without the code
+    having to know any of those names.
+    """
+    if not arm.binding_path:
+        return "", []
+
+    try:
+        payload = json.loads(stdout)
+    except Exception:
+        return "", []
+
+    if "." in arm.binding_path:
+        parent, leaf = arm.binding_path.rsplit(".", 1)
+        containers = extract_json_path(payload, parent)
+    else:
+        leaf = arm.binding_path
+        containers = [payload]
+
+    return leaf, [c for c in containers if isinstance(c, dict)]
+
+
+def describe_instance(instance: dict[str, Any], skip_key: str) -> str:
+    """Render an instance's scalar facts, e.g. `port=7800, pid=1416`."""
+    fields = []
+    for key, value in instance.items():
+        if key == skip_key or value is None or isinstance(value, (dict, list, bool)):
+            continue
+        fields.append(f"{key}={str(value)[:40]}")
+        if len(fields) >= MAX_REPORTED_FIELDS:
+            break
+
+    return ", ".join(fields)
+
+
+def describe_binding(arm: ArmConfig, stdout: str, workspace_root: Path | None) -> str:
+    """One-line account of what a correctly-bound arm is actually serving.
+
+    Surfaces the live values the manifest would otherwise have to hardcode --
+    notably the port, which Unity reassigns between Editor sessions.
+    """
+    leaf, instances = binding_instances(arm, stdout)
+    if not leaf or not workspace_root:
+        return ""
+
+    for instance in instances:
+        served = instance.get(leaf)
+        if isinstance(served, str) and _same_location(served, str(workspace_root)):
+            facts = describe_instance(instance, leaf)
+            return f"serving {served}" + (f" ({facts})" if facts else "")
+
+    return ""
+
+
 def check_arm_binding(arm: ArmConfig, stdout: str, workspace_root: Path | None) -> ArmHealthResult | None:
     """Fail an otherwise-healthy arm that is serving a different project.
 
@@ -74,23 +135,25 @@ def check_arm_binding(arm: ArmConfig, stdout: str, workspace_root: Path | None) 
     if not arm.binding_path or not workspace_root:
         return None
 
-    try:
-        payload = json.loads(stdout)
-    except Exception:
-        return None
-
-    bound_to = [str(v) for v in extract_json_path(payload, arm.binding_path) if isinstance(v, str)]
+    leaf, instances = binding_instances(arm, stdout)
+    bound_to = [str(i[leaf]) for i in instances if isinstance(i.get(leaf), str)]
     if not bound_to:
         return None
 
     if any(_same_location(p, str(workspace_root)) for p in bound_to):
         return None
 
+    detail = "; ".join(
+        f"{i[leaf]}" + (f" ({facts})" if (facts := describe_instance(i, leaf)) else "")
+        for i in instances
+        if isinstance(i.get(leaf), str)
+    )
+
     return ArmHealthResult(
         arm.id,
         arm.name,
         "BOUND_ELSEWHERE",
-        f"P4 Warning: live but serving {', '.join(bound_to)} — not this workspace ({workspace_root}).",
+        f"P4 Warning: live but serving {detail} — not this workspace ({workspace_root}).",
         {"bound_to": bound_to, "workspace_root": str(workspace_root)},
     )
 
@@ -193,8 +256,14 @@ def probe_cli_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHeal
                 misbound = check_arm_binding(arm, res.stdout, workspace_root)
                 if misbound:
                     return misbound
+
+                serving = describe_binding(arm, res.stdout, workspace_root)
+                summary = f"Health check command '{arm.health_check}' active and responding."
+                if serving:
+                    summary = f"Health check command '{arm.health_check}' active — {serving}."
+
                 return ArmHealthResult(
-                    arm.id, arm.name, "READY", f"Health check command '{arm.health_check}' active and responding.", {"stdout": res.stdout[:200]}
+                    arm.id, arm.name, "READY", summary, {"stdout": res.stdout[:200], "serving": serving}
                 )
 
             # A health check that ran and failed is a verdict, not a missing

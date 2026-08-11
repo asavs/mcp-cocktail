@@ -9,7 +9,10 @@ from pathlib import Path
 
 from mcp_cocktail.config import CocktailConfig, ArmConfig
 from mcp_cocktail.doctor import (
+    MAX_REPORTED_FIELDS,
     check_arm_binding,
+    describe_binding,
+    describe_instance,
     extract_json_path,
     first_command_token,
     doctor_check_arm,
@@ -235,6 +238,47 @@ def test_binding_check_flags_an_arm_serving_another_project(tmp_path):
     silent = ArmConfig(id="unity", name="Unity", type="cli", health_check="unity status --json")
     assert check_arm_binding(silent, UNITY_STATUS, tmp_path) is None
     assert check_arm_binding(arm, "not json", tmp_path) is None
+
+
+def test_describe_binding_surfaces_the_live_facts_generically():
+    """Finding 9's diagnostic half: Unity reassigns its pipeline port between
+    Editor sessions (7801 then 7800), so the live value is worth reporting.
+    The parent of binding_path is the instance object, so this reads whatever
+    the tool reports about itself without naming any field in code."""
+    arm = ArmConfig(id="unity", name="Unity", type="cli", command="unity",
+                    health_check="unity status --json",
+                    binding_path="data.instances[].project")
+
+    described = describe_binding(arm, UNITY_STATUS, Path(r"C:\work\gabe"))
+    assert described.startswith(r"serving C:\work\gabe")
+    for fact in ("port=7800", "pid=1416", "version=6000.5.5f1", "state=ready"):
+        assert fact in described
+    assert "project=" not in described, "the leaf is already the subject"
+
+    # Not applicable: wrong workspace, no binding_path, unparseable output.
+    assert describe_binding(arm, UNITY_STATUS, Path(r"C:\work\other")) == ""
+    assert describe_binding(ArmConfig(id="x", name="x", type="cli"), UNITY_STATUS, Path("/w")) == ""
+    assert describe_binding(arm, "not json", Path(r"C:\work\gabe")) == ""
+
+
+def test_wrong_project_message_carries_the_instance_facts():
+    arm = ArmConfig(id="unity", name="Unity", type="cli", command="unity",
+                    health_check="unity status --json",
+                    binding_path="data.instances[].project")
+
+    res = check_arm_binding(arm, UNITY_STATUS, Path(r"C:\work\elsewhere"))
+    assert res is not None
+    assert "port=7800" in res.message
+
+
+def test_describe_instance_skips_structure_and_caps_width():
+    instance = {"project": "p", "port": 1, "nested": {"a": 1}, "list": [1], "flag": True,
+                "long": "x" * 200, **{f"k{i}": i for i in range(10)}}
+    rendered = describe_instance(instance, "project")
+
+    assert "nested=" not in rendered and "list=" not in rendered and "flag=" not in rendered
+    assert "x" * 41 not in rendered
+    assert len(rendered.split(", ")) <= MAX_REPORTED_FIELDS
 
 
 def test_unity_preset_declares_a_binding_for_project_scoped_arms():
