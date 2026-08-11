@@ -43,6 +43,97 @@ def test_default_matcher_subscribes_to_all_tools():
     assert DEFAULT_HOOK_MATCHER == "*"
 
 
+def _cocktail_hooks(settings_file: Path) -> list[dict]:
+    return [
+        hook
+        for entry in load_json_file(settings_file)["hooks"]["PreToolUse"]
+        for hook in entry.get("hooks", [])
+        if "cocktail check" in hook.get("command", "")
+    ]
+
+
+def test_install_replaces_a_hook_carried_by_a_different_matcher(tmp_path: Path):
+    """Field log Finding 6: setup appended a second PreToolUse entry instead of
+    repairing the first, and every tool call produced two identical reminders."""
+    settings_file = tmp_path / ".claude" / "settings.json"
+    settings_file.parent.mkdir(parents=True)
+    settings_file.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash|PowerShell|Edit|Write|mcp__unity-editor-mcp__.*",
+                            "hooks": [{"type": "command", "command": "python -m mcp_cocktail check"}],
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ok, msg = install_hook(harness="claude", target_path=str(settings_file))
+    assert ok
+    assert "Replaced 1 existing" in msg
+    assert len(_cocktail_hooks(settings_file)) == 1, "duplicate hook -> duplicate context injection"
+
+
+def test_install_preserves_unrelated_hooks(tmp_path: Path):
+    settings_file = tmp_path / ".claude" / "settings.json"
+    settings_file.parent.mkdir(parents=True)
+    settings_file.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {"matcher": "Bash", "hooks": [{"type": "command", "command": "some-other-linter"}]}
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    install_hook(harness="claude", target_path=str(settings_file))
+    commands = [
+        h.get("command")
+        for entry in load_json_file(settings_file)["hooks"]["PreToolUse"]
+        for h in entry.get("hooks", [])
+    ]
+    assert "some-other-linter" in commands
+    assert len(_cocktail_hooks(settings_file)) == 1
+
+
+def test_traps_path_is_portable(tmp_path: Path, monkeypatch):
+    """An absolute path bakes one machine's drive layout into the file the
+    README tells teams to commit."""
+    monkeypatch.chdir(tmp_path)
+    traps = tmp_path / ".agents" / "traps.json"
+    traps.parent.mkdir(parents=True)
+    traps.write_text("{}", encoding="utf-8")
+
+    settings_file = tmp_path / ".claude" / "settings.json"
+    install_hook(harness="claude", target_path=str(settings_file), custom_traps=str(traps))
+
+    command = _cocktail_hooks(settings_file)[0]["command"]
+    assert command == 'mcp-cocktail check --traps "$CLAUDE_PROJECT_DIR/.agents/traps.json"'
+    assert str(tmp_path) not in command
+
+
+def test_traps_path_outside_project_stays_absolute(tmp_path: Path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    external = tmp_path / "shared" / "traps.json"
+    external.parent.mkdir(parents=True)
+    external.write_text("{}", encoding="utf-8")
+    monkeypatch.chdir(project)
+
+    settings_file = project / ".claude" / "settings.json"
+    install_hook(harness="claude", target_path=str(settings_file), custom_traps=str(external))
+    assert str(external) in _cocktail_hooks(settings_file)[0]["command"]
+
+
 def test_install_and_uninstall_hook(tmp_path: Path):
     settings_file = tmp_path / ".claude" / "settings.json"
 

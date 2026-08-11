@@ -108,6 +108,61 @@ def is_mcp_cocktail_hook(hook_cmd: str) -> bool:
     return "mcp-cocktail check" in hook_cmd or "mcp_cocktail check" in hook_cmd or "cocktail check" in hook_cmd
 
 
+def strip_cocktail_hooks(pre_tool: list[Any]) -> tuple[list[Any], int]:
+    """Remove every cocktail hook from a PreToolUse list, whatever its matcher.
+
+    Scanning only the entry matching the matcher we are about to write leaves
+    hooks installed under any previous matcher in place, and the harness runs
+    all matching entries -- so the agent receives one copy of every reminder
+    per surviving entry.
+    """
+    kept: list[Any] = []
+    removed = 0
+
+    for entry in pre_tool:
+        if not isinstance(entry, dict):
+            kept.append(entry)
+            continue
+
+        surviving = []
+        for hook in entry.get("hooks", []):
+            if isinstance(hook, dict) and is_mcp_cocktail_hook(hook.get("command", "")):
+                removed += 1
+            else:
+                surviving.append(hook)
+
+        # An entry that existed only to carry a cocktail hook goes with it.
+        if surviving:
+            entry["hooks"] = surviving
+            kept.append(entry)
+
+    return kept, removed
+
+
+def render_traps_arg(traps_path: str | Path | None, harness: str, root: Path | None = None) -> str:
+    """Render the --traps value so a committed settings.json travels between machines.
+
+    An absolute path bakes one developer's drive layout into the file the
+    README tells teams to commit, which is the opposite of inheriting the
+    guardrails.
+    """
+    if not traps_path:
+        return ""
+
+    base = (root or Path.cwd()).resolve()
+    path = Path(traps_path)
+
+    try:
+        rel = path.resolve().relative_to(base).as_posix()
+    except ValueError:
+        return f' --traps "{path}"'  # genuinely outside the project; leave it alone
+
+    if harness.lower().strip() == "claude":
+        return f' --traps "$CLAUDE_PROJECT_DIR/{rel}"'
+
+    return f' --traps "{rel}"'
+
+
 def install_hook_for_harness(
     harness: str = "claude",
     global_settings: bool = False,
@@ -131,11 +186,11 @@ def install_hook_for_harness(
     hooks_sec = data.setdefault("hooks", {})
     pre_tool = hooks_sec.setdefault("PreToolUse", [])
 
-    command_str = DEFAULT_HOOK_COMMAND
-    if custom_traps:
-        command_str += f" --traps \"{custom_traps}\""
-    elif (Path.cwd() / ".agents" / "traps.json").exists():
-        command_str += ' --traps ".agents/traps.json"'
+    traps_target = custom_traps
+    if not traps_target and (Path.cwd() / ".agents" / "traps.json").exists():
+        traps_target = Path.cwd() / ".agents" / "traps.json"
+
+    command_str = DEFAULT_HOOK_COMMAND + render_traps_arg(traps_target, h_clean)
 
     target_hook_obj = {
         "type": "command",
@@ -143,30 +198,25 @@ def install_hook_for_harness(
         "timeout": 10,
     }
 
+    # Clear every prior cocktail hook first, whatever matcher carried it, so a
+    # re-run repairs the configuration instead of stacking a second copy.
+    cleaned, removed = strip_cocktail_hooks(pre_tool)
+    hooks_sec["PreToolUse"] = cleaned
+
     matcher_entry = None
-    for entry in pre_tool:
+    for entry in cleaned:
         if isinstance(entry, dict) and entry.get("matcher") == matcher:
             matcher_entry = entry
             break
 
     if matcher_entry is None:
         matcher_entry = {"matcher": matcher, "hooks": []}
-        pre_tool.append(matcher_entry)
+        cleaned.append(matcher_entry)
 
-    hooks_list = matcher_entry.setdefault("hooks", [])
-    already_installed = False
-
-    for idx, h in enumerate(hooks_list):
-        if isinstance(h, dict) and is_mcp_cocktail_hook(h.get("command", "")):
-            hooks_list[idx] = target_hook_obj
-            already_installed = True
-            break
-
-    if not already_installed:
-        hooks_list.append(target_hook_obj)
+    matcher_entry.setdefault("hooks", []).append(target_hook_obj)
 
     save_json_file(path, data)
-    status = "Updated" if already_installed else "Installed"
+    status = f"Replaced {removed} existing" if removed else "Installed"
     return True, f"{status} mcp-cocktail PreToolUse hook for '{harness}' in {path}"
 
 
@@ -216,29 +266,11 @@ def uninstall_hook(
     hooks_sec = data.get("hooks", {})
     pre_tool = hooks_sec.get("PreToolUse", [])
 
-    removed = False
-    new_pre_tool = []
-
-    for entry in pre_tool:
-        if not isinstance(entry, dict):
-            new_pre_tool.append(entry)
-            continue
-
-        hooks_list = entry.get("hooks", [])
-        new_hooks_list = []
-        for item in hooks_list:
-            if isinstance(item, dict) and is_mcp_cocktail_hook(item.get("command", "")):
-                removed = True
-            else:
-                new_hooks_list.append(item)
-
-        if new_hooks_list:
-            entry["hooks"] = new_hooks_list
-            new_pre_tool.append(entry)
+    new_pre_tool, removed = strip_cocktail_hooks(pre_tool)
 
     if removed:
         data["hooks"]["PreToolUse"] = new_pre_tool
         save_json_file(path, data)
-        return True, f"Uninstalled mcp-cocktail PreToolUse hook from {path}"
+        return True, f"Uninstalled {removed} mcp-cocktail PreToolUse hook(s) from {path}"
 
     return False, f"No mcp-cocktail PreToolUse hook found in {path}"
