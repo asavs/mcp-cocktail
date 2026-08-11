@@ -1,7 +1,10 @@
 """Tests for mcp_cocktail.doctor module."""
 
+import contextlib
 import json
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from mcp_cocktail.config import CocktailConfig, ArmConfig
@@ -110,6 +113,67 @@ def test_quoted_health_check_arm_probes_the_real_interpreter():
                     health_check=f'"{sys.executable}" -c "pass"')
     res = probe_cli_arm(arm)
     assert res.status == "READY", res.message
+
+
+@contextlib.contextmanager
+def local_server(handler_body: bytes, content_type: str = "text/plain", status: int = 200):
+    """Serve one canned response on an ephemeral port."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def _respond(self):
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(handler_body)))
+            self.end_headers()
+            self.wfile.write(handler_body)
+
+        do_GET = _respond
+        do_POST = _respond
+
+        def log_message(self, *args):  # keep pytest output clean
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/mcp"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_http_200_from_a_non_mcp_server_is_not_ready():
+    """Field log V4: a plain server returning 200 with the body
+    'hello, I am not an MCP server' reported READY. The tool built to detect
+    P4 green lights must not emit one."""
+    with local_server(b"hello, I am not an MCP server") as url:
+        arm = ArmConfig(id="impostor", name="Impostor", type="mcp", health_check=url)
+        res = probe_mcp_arm(arm)
+
+    assert res.status == "SOCKET_BOUND_ONLY"
+    assert "not speaking MCP" in res.message
+
+
+def test_http_200_from_a_real_jsonrpc_endpoint_is_ready():
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2024-11-05"}}).encode()
+    with local_server(body, content_type="application/json") as url:
+        arm = ArmConfig(id="genuine", name="Genuine", type="mcp", health_check=url)
+        res = probe_mcp_arm(arm)
+
+    assert res.status == "READY"
+
+
+def test_406_still_reports_bound_only_without_a_handshake():
+    """coplay-mcp's verified P4 path: the 401/403/406 branch must keep its
+    existing verdict rather than being re-decided by the handshake."""
+    with local_server(b"Not Acceptable", status=406) as url:
+        arm = ArmConfig(id="coplay-mcp", name="Coplay", type="mcp", health_check=url)
+        res = probe_mcp_arm(arm)
+
+    assert res.status == "SOCKET_BOUND_ONLY"
+    assert "406" in res.message
+    assert "Session token or Editor registration required" in res.message
 
 
 UNITY_STATUS = json.dumps({

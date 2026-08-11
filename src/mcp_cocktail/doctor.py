@@ -190,6 +190,52 @@ def probe_http_health(url: str, timeout: int = 2) -> tuple[int | None, str]:
         return None, str(e)
 
 
+def speaks_mcp_over_http(url: str, timeout: int = 2) -> tuple[bool, str]:
+    """POST a JSON-RPC `initialize` and check for a JSON-RPC reply.
+
+    HTTP 200 proves only that something answered. Accepting that as READY
+    would make the tool built to detect P4 green lights emit one: a plain web
+    server on the right port reports a healthy MCP arm.
+    """
+    payload = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "mcp-cocktail-doctor", "version": "1.0"},
+        },
+    }).encode("utf-8")
+
+    request = urllib.request.Request(
+        url,
+        data=payload,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "User-Agent": "mcp-cocktail-doctor",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read(4096).decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read(4096).decode("utf-8", errors="replace")
+        except Exception:
+            return False, f"HTTP {e.code} to initialize"
+    except Exception as e:
+        return False, f"initialize failed ({e})"
+
+    if "jsonrpc" in body:
+        return True, "JSON-RPC initialize acknowledged"
+
+    return False, "no JSON-RPC response to initialize"
+
+
 def probe_stdio_mcp_arm(arm: ArmConfig) -> ArmHealthResult:
     """Probe a stdio MCP server directly by spawning the process and sending JSON-RPC initialize."""
     target_cmd = arm.command or arm.mcp_server or arm.id
@@ -242,7 +288,14 @@ def probe_stdio_mcp_arm(arm: ArmConfig) -> ArmHealthResult:
                         pass
 
                 proc.terminate()
-                tool_msg = f"{tool_count} tools available" if tool_count > 0 else "initialized cleanly"
+                # "advertised", not "available": a catalogue is not a
+                # capability. The Unity MCP advertises ~140 tools with no
+                # Editor running, and every one of them then blocks 60s.
+                tool_msg = (
+                    f"initialized cleanly, {tool_count} tools advertised"
+                    if tool_count > 0
+                    else "initialized cleanly"
+                )
                 return ArmHealthResult(
                     arm.id,
                     arm.name,
@@ -275,8 +328,23 @@ def probe_mcp_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHeal
             )
 
         if status_code in (200, 204):
+            # A 200 says something answered, not that it speaks MCP. Confirm
+            # with a real handshake before calling the arm READY.
+            is_mcp, detail = speaks_mcp_over_http(url)
+            if not is_mcp:
+                return ArmHealthResult(
+                    arm.id,
+                    arm.name,
+                    "SOCKET_BOUND_ONLY",
+                    f"P4 Warning: {url} answers HTTP {status_code} but is not speaking MCP "
+                    f"({detail}). Something is listening on that port; it is not a usable MCP session.",
+                    {"status": status_code, "handshake": detail},
+                )
+
             return ArmHealthResult(
-                arm.id, arm.name, "READY", f"MCP server reachable and responding 200 OK at {url}.", {"status": status_code}
+                arm.id, arm.name, "READY",
+                f"MCP server reachable at {url} and {detail}.",
+                {"status": status_code, "handshake": detail},
             )
 
         if status_code in (401, 403, 406):
