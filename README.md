@@ -107,8 +107,26 @@ Reports:
 - 🟡 `[BOUND_ONLY (P4)]` (something is listening, but it is not a usable MCP session — unauthenticated, unregistered, or not speaking MCP at all)
 - 🟡 `[WRONG_PROJECT (P4)]` (arm is live and healthy, but serving a different project than this workspace)
 - 🟠 `[NOT_RUNNING]` (the tool is installed and answered — its backend is down. Start it, or fall back to the CLI)
-- 🟠 `[UNCONFIGURED]` (unreachable *and* its setup script is missing, so it cannot be started)
+- 🟠 `[UNCONFIGURED]` (unreachable *and* its setup script is missing; or not probed at all, because
+  the arm has no automatable check or could not be tied to a real upstream project)
 - 🔴 `[OFFLINE]` (binary not on PATH, or the port is unreachable — no evidence it is installed)
+
+Arms that are not installed carry their acquisition route on the same line, so a survey entry you
+were never meant to have is distinguishable from something that broke. `doctor` also warns when
+two arms report READY on the same binary — three separate Unity CLI projects all install an
+executable named `unity-cli`, and only one of them can own that name on PATH.
+
+### 2b. Obtain the Missing Arms (`mcp-cocktail install`)
+
+```bash
+mcp-cocktail install                      # every arm
+mcp-cocktail install hatayama-loop        # just this one
+```
+
+Prints the documented install command, the editor-side package URL, the harness registration
+snippet, and the gotchas — for each arm, sourced from that project's own docs. It **prints steps
+and never runs them**: these install third-party software, and several need choices only you can
+make (which Unity project, which port).
 
 `doctor` reports and exits 0; a manifest is a survey of competing arms, so it does not
 fail merely because some arm is down. To assert on the arms you actually depend on:

@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from mcp_cocktail import __version__
+from mcp_cocktail.acquire import render_install_plan
 from mcp_cocktail.config import CocktailConfig, TrapsConfig
 from mcp_cocktail.console import ensure_utf8_streams
 from mcp_cocktail.discover import (
@@ -179,6 +180,22 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # tool exists to catch: every visible step succeeded and nothing usable
     # came of it. Grade on the arms, and say which part did work, so the
     # provisioning that did land is not mistaken for a total failure.
+    # The doctor table says which arms are missing; this says what to do about
+    # it. Without the handoff, setup ends by naming problems it already knows
+    # the documented fix for.
+    missing = [r.arm_id for r in doc_results if r.status not in READY_STATUSES]
+    obtainable = [
+        a.id for a in config.arms
+        if a.id in missing
+        and a.probe != "unverified"                     # no route exists to offer
+        and a.install.get("method") != "unknown"
+        and (a.install or a.setup_script)
+    ]
+    if obtainable:
+        print(f"\nTo obtain the {len(obtainable)} arm(s) that record an install route, run:")
+        print(f"    mcp-cocktail install {' '.join(obtainable[:3])}"
+              + (" ..." if len(obtainable) > 3 else ""))
+
     ready = [r for r in doc_results if r.status in READY_STATUSES]
     if not ready:
         print(f"\n[FAILED] setup provisioned '{preset}', but 0/{len(doc_results)} arms are READY.")
@@ -194,6 +211,22 @@ def cmd_setup(args: argparse.Namespace) -> int:
     print(f"\n[OK] mcp-cocktail setup complete for '{preset}' domain "
           f"({len(ready)}/{len(doc_results)} arms READY, {guardrail}).")
     return 0
+
+
+def cmd_install(args: argparse.Namespace) -> int:
+    config = CocktailConfig.load(Path.cwd())
+    if not config.arms:
+        print("No arms defined. Run `mcp-cocktail setup --preset <domain>` first.")
+        return 2
+
+    text, unknown = render_install_plan(config, args.arms)
+    print(text)
+
+    for arm_id in unknown:
+        known = ", ".join(a.id for a in config.arms)
+        print(f"\n[ERROR] no such arm '{arm_id}' in this manifest. Known arms: {known}")
+
+    return 2 if unknown else 0
 
 
 def cmd_discover(args: argparse.Namespace) -> int:
@@ -420,6 +453,9 @@ def main(argv: list[str] | None = None) -> int:
     p_setup.add_argument("--global", dest="global_settings", action="store_true", help="Target global settings")
     p_setup.add_argument("--settings", help="Explicit path to settings.json")
 
+    p_inst = subparsers.add_parser("install", help="Print how to obtain and register arms (prints steps, never runs them)")
+    p_inst.add_argument("arms", nargs="*", help="Arm IDs to plan for (default: all arms in the manifest)")
+
     p_disc = subparsers.add_parser("discover", help="Discover open-source MCP servers and CLIs for a domain")
     p_disc.add_argument("--domain", default="unity", help="Target software domain (e.g. unity, postgres, docker, github)")
     p_disc.add_argument("--agentic", action="store_true", help="Generate an agentic scout task spec for deep multi-source web search")
@@ -497,6 +533,7 @@ def main(argv: list[str] | None = None) -> int:
     handler = {
         "init": cmd_init,
         "setup": cmd_setup,
+        "install": cmd_install,
         "discover": cmd_discover,
         "sync": cmd_sync,
         "doctor": cmd_doctor,

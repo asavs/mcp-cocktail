@@ -98,6 +98,50 @@ To add a new software domain (e.g., `postgres`, `docker`, `figma`):
    }
    ```
 
+   **Recording how an arm is obtained.** A manifest is a survey of competing arms, so most
+   entries are things the reader does not have. Give each arm an acquisition route, or doctor
+   can only report `OFFLINE` and leave them guessing whether that is a broken install or an arm
+   they were never meant to have:
+
+   ```json
+   {
+     "id": "some-mcp",
+     "install_hint": "npm install -g some-mcp   (one line, shown in the doctor table)",
+     "install": {
+       "method": "npm",
+       "command": "npm install -g some-mcp",
+       "package_url": "https://github.com/org/repo.git?path=/Packages/src",
+       "docs_url": "https://github.com/org/repo",
+       "requires_editor": true,
+       "steps": ["Install the server", "Add the editor-side package", "Register with your harness"],
+       "client_config": { "mcpServers": { "some-mcp": { "command": "node", "args": ["..."] } } },
+       "note": "Anything a person setting this up will trip over."
+     }
+   }
+   ```
+
+   Every field is optional, because the ecosystem offers no single install shape — some arms are
+   one `npx`, others are an editor package plus a separate server with no shell installer at all.
+   `mcp-cocktail install <arm>` renders this; it prints steps and never runs them.
+
+   **Never invent a value here.** An unverified install command shipped in a preset is worse than
+   an honest blank: it puts a confident wrong instruction inside the tool built to catch confident
+   wrong signals. If you cannot source a field from the project's own docs, leave it out.
+
+   **Say when an arm cannot be probed** with `probe`, rather than pointing `health_check` at a
+   plausible-looking endpoint:
+
+   | `probe` | meaning |
+   |---|---|
+   | `auto` (default) | probe normally; a URL `health_check` is an MCP endpoint and must complete a JSON-RPC handshake |
+   | `http` | the URL is a plain liveness endpoint, not MCP — 2xx means healthy |
+   | `none` | real project, no automatable check (port derived per project, WebSocket-only, …) |
+   | `unverified` | the entry could not be tied to a real upstream project |
+
+   `none` and `unverified` require a `probe_reason`. Both skip probing entirely, because a probe
+   against an endpoint nobody could confirm manufactures a precise-sounding failure — "unreachable
+   at 127.0.0.1:9500" reads as a server that is down, not as an entry we cannot substantiate.
+
 3. Create `src/mcp_cocktail/presets/<domain>/traps.json` with initial guardrail rules for that domain.
 4. Create `examples/<domain>/README.md` explaining setup and tool usage, plus whatever evidence
    (trial reports, research notes) backs the preset. That half stays in the repo and out of the wheel.

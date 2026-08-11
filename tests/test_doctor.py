@@ -28,6 +28,7 @@ from mcp_cocktail.doctor import (
     probe_cli_arm,
     probe_mcp_arm,
     resolve_probe_binary,
+    shared_probe_binaries,
     summarize_failure,
 )
 from mcp_cocktail.installer import PRESETS_DIR
@@ -180,15 +181,21 @@ def test_the_no_route_marker_is_explained_once_not_per_row(capsys):
     on every marked row, which reproduced the wall of noise it was written to
     remove. The rows carry a marker; the summary explains it."""
     config = CocktailConfig.load(PRESETS_DIR / "unity" / "manifest.json")
+    routeless = [
+        ArmConfig(id=f"bare{i}", name=f"Bare {i}", type="cli", command="nope")
+        for i in range(3)
+    ]
     results = [
         ArmHealthResult(a.id, a.name, "OFFLINE", append_note("down", acquisition_note(a)), {})
-        for a in config.arms
+        for a in routeless
     ]
     print_doctor_report(results, config)
 
     out = capsys.readouterr().out
     assert out.count("declare neither a setup_script nor an") == 1
-    assert out.count(f"({NO_ROUTE_MARKER})") > 1, "rows should still be individually marked"
+
+    marked_rows = [ln for ln in out.splitlines() if ln.startswith("bare") and NO_ROUTE_MARKER in ln]
+    assert len(marked_rows) == 3, "rows should still be individually marked"
 
 
 def test_report_columns_stay_aligned_for_long_arm_names(capsys):
@@ -206,6 +213,98 @@ def test_report_columns_stay_aligned_for_long_arm_names(capsys):
     rows = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith(("short ", "a-much-longer"))]
     assert len(rows) == 2
     assert len({row.index("[") for row in rows}) == 1, "status column is ragged"
+
+
+def test_unverified_arm_is_not_probed_at_all():
+    """Probing an entry nobody could tie to a real project manufactures a
+    precise-sounding failure about an endpoint that never existed --
+    'unreachable at 127.0.0.1:9500' reads as a server that is down."""
+    arm = ArmConfig(id="ghost", name="Ghost", type="mcp",
+                    health_check="http://127.0.0.1:59998/mcp",
+                    probe="unverified",
+                    probe_reason="No such project exists on npm or GitHub.")
+    res = doctor_check_arm(arm)
+
+    assert res.status == "UNCONFIGURED"
+    assert "could not be tied to a real upstream project" in res.message
+    assert "No such project exists" in res.message
+    assert "unreachable" not in res.message, "it must not report on the invented endpoint"
+
+
+def test_arm_with_no_automatable_check_says_so_rather_than_failing():
+    arm = ArmConfig(id="ws-only", name="WebSocket only", type="mcp",
+                    probe="none",
+                    probe_reason="It serves WebSocket on 18711, not HTTP.")
+    res = doctor_check_arm(arm)
+
+    assert res.status == "UNCONFIGURED"
+    assert "no automatable health check" in res.message
+    assert "WebSocket on 18711" in res.message
+
+
+def test_plain_http_health_endpoint_is_not_asked_to_speak_mcp():
+    """Not every URL worth checking is an MCP endpoint. AnkleBreaker's Unity
+    bridge exposes a liveness ping, and demanding a JSON-RPC handshake of it
+    reported a healthy service as a P4 warning."""
+    with local_server(b"pong") as url:
+        arm = ArmConfig(id="bridge", name="Bridge", type="mcp", health_check=url, probe="http")
+        res = probe_mcp_arm(arm)
+
+    assert res.status == "READY"
+    assert "answered HTTP 200" in res.message
+
+
+def test_two_arms_probing_one_binary_cannot_both_be_installed():
+    """Three separate Unity CLI projects each install an executable named
+    `unity-cli`. Every arm's row is individually correct and the set is a lie:
+    whichever is on PATH answers for all of them, so all report READY. No
+    per-arm check can see this, because the collision is a property of the set.
+    """
+    config = CocktailConfig(
+        name="collide", description="",
+        arms=[
+            ArmConfig(id="a", name="A", type="cli", command="unity-cli", health_check="unity-cli --version"),
+            ArmConfig(id="b", name="B", type="cli", command="unity-cli", health_check="unity-cli --version"),
+            ArmConfig(id="c", name="C", type="cli", command="uloop", health_check="uloop --version"),
+        ],
+    )
+
+    assert shared_probe_binaries(config) == {"unity-cli": ["a", "b"]}
+
+
+def test_shipped_preset_declares_the_unity_cli_collision():
+    """Guards the live case: akiojin, youngwoo and rage all install `unity-cli`."""
+    config = CocktailConfig.load(PRESETS_DIR / "unity" / "manifest.json")
+    shared = shared_probe_binaries(config)
+
+    assert "unity-cli" in shared
+    assert set(shared["unity-cli"]) == {"akiojin-cli", "youngwoo-cli", "rage-cli"}
+
+
+def test_collision_is_reported_only_when_it_actually_inflates_the_count(capsys):
+    config = CocktailConfig(
+        name="collide", description="",
+        arms=[
+            ArmConfig(id="a", name="A", type="cli", command="unity-cli", health_check="unity-cli --version"),
+            ArmConfig(id="b", name="B", type="cli", command="unity-cli", health_check="unity-cli --version"),
+        ],
+    )
+
+    one_ready = [
+        ArmHealthResult("a", "A", "READY", "ok", {}),
+        ArmHealthResult("b", "B", "OFFLINE", "no", {}),
+    ]
+    print_doctor_report(one_ready, config)
+    assert "P4 Warning" not in capsys.readouterr().out, "one READY arm is not a collision"
+
+    both_ready = [
+        ArmHealthResult("a", "A", "READY", "ok", {}),
+        ArmHealthResult("b", "B", "READY", "ok", {}),
+    ]
+    print_doctor_report(both_ready, config)
+    out = capsys.readouterr().out
+    assert "P4 Warning" in out
+    assert "unity-cli" in out
 
 
 def test_evaluate_requirements():

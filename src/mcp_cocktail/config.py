@@ -27,6 +27,29 @@ class ArmConfig:
     # and leave them to guess whether that is a broken install or an arm they
     # were never expected to have.
     install_hint: str | None = None
+    # Full acquisition record: {method, command, package_url, docs_url, steps,
+    # client_config, requires_editor}. Every field optional, because the real
+    # ecosystem does not offer one uniform install shape -- some arms are a
+    # single `npx`, others are a Unity package plus a separate server process
+    # with no shell installer at all, and a schema that insisted on a command
+    # string could only be populated by inventing one.
+    install: dict[str, Any] = field(default_factory=dict)
+    # Whether this arm can be health-checked at all, and if not, why not.
+    #   "auto"       -- probe normally (default); a URL health_check is an MCP
+    #                   endpoint and must complete a JSON-RPC handshake
+    #   "http"       -- the URL is a plain health endpoint, not MCP. 2xx means
+    #                   healthy. Demanding a handshake of a liveness ping
+    #                   reports a working service as a P4 warning.
+    #   "none"       -- real project, but no automatable check exists: the port
+    #                   is derived per project, or the transport is WebSocket
+    #                   with no HTTP endpoint. Needs probe_reason.
+    #   "unverified" -- the entry could not be tied to a real upstream project,
+    #                   so any endpoint recorded for it is invented.
+    # Probing anyway would manufacture a precise-sounding failure about an
+    # endpoint that never existed, which reads as "the server is down" rather
+    # than "we cannot substantiate this".
+    probe: str = "auto"
+    probe_reason: str = ""
     health_check: str | None = None
     # Dotted path into the health check's JSON stdout naming the project each
     # live instance is serving, e.g. "data.instances[].project". Lets doctor
@@ -39,7 +62,8 @@ class ArmConfig:
         known = {
             "id", "name", "type", "command", "mcp_server",
             "tool_prefix", "description", "capabilities", "env",
-            "setup_script", "install_hint", "health_check", "binding_path"
+            "setup_script", "install_hint", "install", "probe", "probe_reason",
+            "health_check", "binding_path"
         }
         extra = {k: v for k, v in data.items() if k not in known}
         caps = data.get("capabilities", [])
@@ -58,6 +82,9 @@ class ArmConfig:
             env=data.get("env", {}),
             setup_script=data.get("setup_script"),
             install_hint=data.get("install_hint"),
+            install=data.get("install") or {},
+            probe=data.get("probe", "auto"),
+            probe_reason=data.get("probe_reason", ""),
             health_check=data.get("health_check"),
             binding_path=data.get("binding_path"),
             extra=extra,

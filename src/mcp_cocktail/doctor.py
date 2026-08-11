@@ -469,6 +469,24 @@ def probe_mcp_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHeal
                 arm.id, arm.name, "OFFLINE", f"Server unreachable at {url} ({msg}).", {}
             )
 
+        # Not every URL worth checking is an MCP endpoint. Some arms expose a
+        # plain liveness ping on the Unity side -- that endpoint answering is
+        # exactly the "is this wired up" signal we want, and demanding a
+        # JSON-RPC handshake of it would report a healthy service as a P4
+        # warning. The arm says which kind it is; we do not guess from the URL.
+        if arm.probe == "http":
+            if status_code in (200, 204):
+                return ArmHealthResult(
+                    arm.id, arm.name, "READY",
+                    f"Health endpoint {url} answered HTTP {status_code}.",
+                    {"status": status_code},
+                )
+            return ArmHealthResult(
+                arm.id, arm.name, "NOT_RUNNING",
+                f"Health endpoint {url} answered HTTP {status_code} ({msg}).",
+                {"status": status_code},
+            )
+
         # Something is listening. What it answers to a *GET* settles nothing:
         # MCP's Streamable HTTP transport carries every request over POST, and
         # a spec-compliant server rejects a GET that does not ask for an event
@@ -552,6 +570,10 @@ def acquisition_note(arm: ArmConfig) -> str:
     if arm.install_hint:
         return f"Install: {arm.install_hint}"
 
+    docs = arm.install.get("docs_url")
+    if docs:
+        return f"Install: see {docs} (`mcp-cocktail install {arm.id}` for steps)"
+
     if not arm.setup_script:
         return f"({NO_ROUTE_MARKER})"
 
@@ -573,6 +595,26 @@ def append_note(message: str, note: str) -> str:
 
 
 def doctor_check_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHealthResult:
+    # Probing an arm we cannot honestly probe manufactures a precise-sounding
+    # failure about an endpoint that was never real: "unreachable at
+    # 127.0.0.1:9500" reads as a server that is down, not as an entry nobody
+    # could substantiate. Say which one it is.
+    if arm.probe in ("none", "unverified"):
+        preamble = (
+            "Not probed: this arm's entry could not be tied to a real upstream project, "
+            "so any endpoint recorded for it is unverified."
+            if arm.probe == "unverified"
+            else "Not probed: no automatable health check exists for this arm."
+        )
+        reason = f" {arm.probe_reason}" if arm.probe_reason else ""
+        return ArmHealthResult(
+            arm.id,
+            arm.name,
+            "UNCONFIGURED",
+            append_note(f"{preamble}{reason}", acquisition_note(arm)),
+            {"probe": arm.probe},
+        )
+
     result = probe_mcp_arm(arm, workspace_root) if arm.type == "mcp" else probe_cli_arm(arm, workspace_root)
 
     # An arm that is down *and* has no way to be brought up is unconfigured,
@@ -602,6 +644,31 @@ def doctor_check_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmH
         )
 
     return result
+
+
+def shared_probe_binaries(config: CocktailConfig) -> dict[str, list[str]]:
+    """Probe binaries that more than one arm claims, keyed by binary name.
+
+    Three separate Unity CLI projects each install an executable named
+    `unity-cli`. Only one of them can win a PATH lookup, but all three arms
+    probe `unity-cli --version`, so whichever is installed answers for all of
+    them and every one reports READY. That is a P4 green light manufactured by
+    the manifest itself -- a rich surface implying three capabilities where at
+    most one exists -- and no per-arm check can see it, because the collision
+    is a property of the set.
+    """
+    claims: dict[str, list[str]] = {}
+    for arm in config.arms:
+        if arm.probe != "auto":
+            continue
+        hc = (arm.health_check or "").strip()
+        if hc.startswith(("http://", "https://")):
+            continue
+        binary = resolve_probe_binary(arm)
+        if binary:
+            claims.setdefault(binary, []).append(arm.id)
+
+    return {binary: ids for binary, ids in claims.items() if len(ids) > 1}
 
 
 def run_doctor(config: CocktailConfig) -> list[ArmHealthResult]:
@@ -683,6 +750,17 @@ def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) 
     )
     summary = f"\nDoctor Summary: {ready_count}/{len(results)} arms READY"
     print(f"{summary} ({breakdown})." if breakdown else f"{summary}.")
+
+    # A collision is invisible per-arm: each row is individually correct and
+    # the set is a lie. Report it next to the count it inflates.
+    ready_ids = {r.arm_id for r in results if r.status in READY_STATUSES}
+    for binary, arm_ids in sorted(shared_probe_binaries(config).items()):
+        colliding = [a for a in arm_ids if a in ready_ids]
+        if len(colliding) > 1:
+            print(f"\n[P4 Warning] {len(colliding)} arms all report READY on the same binary "
+                  f"'{binary}': {', '.join(colliding)}.")
+            print("Only one program can own that name on PATH, so at most one of these arms is")
+            print("really installed -- the others are reporting on someone else's executable.")
 
     # Say once what the row marker means, rather than on every row that
     # carries it.

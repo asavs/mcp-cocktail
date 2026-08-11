@@ -152,3 +152,45 @@ def test_cli_run(tmp_path: Path):
         res = main(["run", "T-100", "Execute test task"])
         assert res == 0
         assert (tmp_path / "docs" / "trials" / "T-100" / "brief-a1.md").exists()
+
+
+def test_install_plan_prints_steps_for_a_named_arm(tmp_path: Path, capsys):
+    with patch("pathlib.Path.cwd", return_value=tmp_path), \
+            patch("mcp_cocktail.cli.run_doctor", return_value=_health("READY")):
+        main(["setup", "--preset", "unity", "--settings", str(tmp_path / "s.json")])
+        capsys.readouterr()
+        assert main(["install", "hatayama-loop"]) == 0
+
+    out = capsys.readouterr().out
+    assert "npm install -g uloop-cli" in out
+    assert "unity-cli-loop.git" in out, "the Unity-side package is half the install"
+    assert "never executed" in out, "the plan must not read as something that ran"
+
+
+def test_install_plan_rejects_an_unknown_arm(tmp_path: Path, capsys):
+    with patch("pathlib.Path.cwd", return_value=tmp_path), \
+            patch("mcp_cocktail.cli.run_doctor", return_value=_health("READY")):
+        main(["setup", "--preset", "unity", "--settings", str(tmp_path / "s.json")])
+        capsys.readouterr()
+        assert main(["install", "not-an-arm"]) == 2
+
+    assert "no such arm" in capsys.readouterr().out
+
+
+def test_setup_does_not_offer_a_route_for_an_unresolved_arm(tmp_path: Path, capsys):
+    """smithery-toolkit-mcp carries an `install` block that exists only to say
+    the project could not be found. Listing it as obtainable would send someone
+    to fetch a thing nobody could locate."""
+    from mcp_cocktail.config import CocktailConfig
+
+    preset = CocktailConfig.load(PRESETS_DIR / "unity" / "manifest.json")
+    all_offline = [ArmHealthResult(a.id, a.name, "OFFLINE", "canned", {}) for a in preset.arms]
+
+    with patch("pathlib.Path.cwd", return_value=tmp_path), \
+            patch("mcp_cocktail.cli.run_doctor", return_value=all_offline):
+        main(["setup", "--preset", "unity", "--settings", str(tmp_path / "s.json")])
+
+    out = capsys.readouterr().out
+    handoff = [ln for ln in out.splitlines() if "mcp-cocktail install " in ln]
+    assert handoff, "expected an install handoff line"
+    assert "smithery-toolkit-mcp" not in " ".join(handoff)
