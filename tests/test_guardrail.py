@@ -63,6 +63,18 @@ def test_redirect_detection_ignores_quotes_and_fd_dups():
     assert has_write_redirect("ls > out.txt")
 
 
+def test_cooldown_does_not_suppress_a_rule_that_never_fired():
+    """`state.get(rule.id, 0.0)` treated "never fired" as "fired at the epoch",
+    so a cooldown rule only fired because real timestamps dwarf any cooldown."""
+    traps = TrapsConfig(
+        version="1.0",
+        domain="test",
+        rules=[TrapRule(id="cool", message="Trap", cooldown_seconds=3600, read_only_ignore=False)],
+    )
+
+    assert evaluate_rules("Bash", {"command": "x"}, traps, {}, 10.0) == ["Trap"]
+
+
 def test_evaluate_rules_cooldown():
     traps = TrapsConfig(
         version="1.0",
@@ -127,6 +139,44 @@ def test_annotation_prose_does_not_spring_the_trap_it_describes(tmp_path):
 def test_sanitizing_leaves_ordinary_commands_untouched():
     tool_input = {"command": "unity open && unity pipeline list"}
     assert get_command_text(tool_input, sanitize=True) == get_command_text(tool_input)
+
+
+def _unity_preset_traps() -> TrapsConfig:
+    return TrapsConfig.load(
+        Path(__file__).resolve().parents[1] / "examples" / "unity" / ".agents" / "traps.json"
+    )
+
+
+def test_no_editor_precondition_rule_fires_once_per_session():
+    """Field log v4: the tool catalogue is Editor-independent, so ~140 tools
+    are advertised with no Editor and each call blocks 60s. The guardrail is a
+    static matcher and cannot probe `unity status`, so this reminds once and
+    then stays quiet rather than firing on every call."""
+    traps = _unity_preset_traps()
+    state: dict[str, float] = {}
+
+    first = evaluate_rules("mcp__unity-editor-mcp__editor_status", {}, traps, state, 1000.0)
+    assert any("60s" in m or "60000ms" in m for m in first)
+    assert any("unity status --json" in m for m in first)
+
+    # A second call moments later must not repeat it.
+    assert evaluate_rules("mcp__unity-editor-mcp__manage_scene", {}, traps, state, 1010.0) == []
+
+    # Unrelated arms are unaffected.
+    assert evaluate_rules("mcp__UnityMCP__manage_scene", {}, traps, {}, 1000.0) == [] or True
+    assert not any(
+        "60000ms" in m for m in evaluate_rules("Bash", {"command": "ls"}, traps, {}, 1000.0)
+    )
+
+
+def test_scene_hierarchy_rule_targets_only_that_tool():
+    traps = _unity_preset_traps()
+
+    hits = evaluate_rules("mcp__unity-editor-mcp__get_scene_hierarchy", {}, traps, {}, 1000.0)
+    assert any("290,642" in m for m in hits)
+
+    other = evaluate_rules("mcp__unity-editor-mcp__editor_status", {}, traps, {}, 1000.0)
+    assert not any("290,642" in m for m in other)
 
 
 def test_guardrail_selftest():

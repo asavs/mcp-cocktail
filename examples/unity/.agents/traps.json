@@ -67,6 +67,22 @@
       "read_only_ignore": true
     },
     {
+      "id": "unity-mcp-no-editor-precondition",
+      "message": "P1 — Check `unity status --json` before the first `mcp__unity-editor-mcp__*` call. The tool catalogue is advertised whether or not an Editor is running, so its presence is NOT evidence one exists. With `count: 0` every call in this catalogue blocks the full 60s and returns 'Pipeline command timed out after 60000ms' without ever naming the missing precondition. The check costs ~200ms; the failure costs a minute per call. If no Editor is running, use the `unity` CLI instead.",
+      "tool_matcher": "^mcp__unity-editor-mcp__.*$",
+      "target_matcher": null,
+      "cooldown_seconds": 3600,
+      "read_only_ignore": false
+    },
+    {
+      "id": "unity-mcp-scene-hierarchy-unbounded",
+      "message": "P2 — `get_scene_hierarchy` takes only `path` — no depth or limit. Unscoped on a real scene it returned 290,642 characters across 7,883 lines, overflowing the tool-result budget and spilling to a file. Pass `path` to scope it to the subtree you actually need.",
+      "tool_matcher": "^mcp__unity-editor-mcp__get_scene_hierarchy$",
+      "target_matcher": null,
+      "cooldown_seconds": 1800,
+      "read_only_ignore": false
+    },
+    {
       "id": "coplay-write-no-echo",
       "message": "P5 — CoplayDev writes do not echo state. Read the state back explicitly after any mutation.",
       "tool_matcher": "^mcp__(UnityMCP|unityMCP)__manage_(gameobject|components|material|scriptable_object)$",

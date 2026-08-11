@@ -189,8 +189,16 @@ def evaluate_rules(
         if rule.read_only_ignore and is_read_only(raw_text):
             continue
 
-        last_fired = state.get(rule.id, 0.0)
-        if rule.cooldown_seconds > 0 and (now - last_fired) < rule.cooldown_seconds:
+        # Absent means never fired. Defaulting to 0.0 conflated that with
+        # "fired at the epoch", which only behaves because wall-clock values
+        # dwarf any cooldown -- a rule with a cooldown was silently suppressed
+        # on its first evaluation for any smaller clock.
+        last_fired = state.get(rule.id)
+        if (
+            rule.cooldown_seconds > 0
+            and last_fired is not None
+            and (now - last_fired) < rule.cooldown_seconds
+        ):
             continue
 
         state[rule.id] = now
