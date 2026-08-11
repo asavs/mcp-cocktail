@@ -121,6 +121,24 @@ class CocktailConfig:
         )
 
 
+def resolve_traps_path(root_dir: Path | str | None = None) -> Path:
+    """Locate the rule store a workspace actually reads.
+
+    `.agents/traps.json` is canonical; a bare `traps.json` is the pre-.agents
+    layout and still honoured when it is the only one present. Readers and
+    writers must both go through this, or a write lands on a file the loader
+    never opens.
+    """
+    root = Path(root_dir) if root_dir else Path.cwd()
+    canonical = root / ".agents" / "traps.json"
+
+    for candidate in (canonical, root / "traps.json"):
+        if candidate.exists():
+            return candidate
+
+    return canonical
+
+
 @dataclass
 class TrapRule:
     id: str
@@ -155,18 +173,7 @@ class TrapsConfig:
     @classmethod
     def load(cls, path_or_dir: str | Path | None = None) -> TrapsConfig:
         target = Path(path_or_dir) if path_or_dir else Path.cwd()
-        if target.is_dir():
-            candidates = [
-                target / ".agents" / "traps.json",
-                target / "traps.json",
-            ]
-            file_path = target / "traps.json"
-            for c in candidates:
-                if c.exists():
-                    file_path = c
-                    break
-        else:
-            file_path = target
+        file_path = resolve_traps_path(target) if target.is_dir() else target
 
         if not file_path.exists():
             return cls(version="1.0", domain="general", rules=[])

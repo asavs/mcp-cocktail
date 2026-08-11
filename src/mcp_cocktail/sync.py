@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from mcp_cocktail.config import CocktailConfig, TrapsConfig, TrapRule
+from mcp_cocktail.config import CocktailConfig, TrapsConfig, TrapRule, resolve_traps_path
 from mcp_cocktail.scorecard import propose_rsi_guardrails
 
 REMOTE_REGISTRY_BASE_URL = "https://raw.githubusercontent.com/asavs/mcp-cocktail/main/examples"
@@ -51,7 +51,7 @@ def merge_traps_config(existing_raw: dict[str, Any], remote_raw: dict[str, Any])
 def pull_domain_rules(domain: str, root_dir: Path | str | None = None) -> tuple[bool, str]:
     """Pull and non-destructively merge latest community weakness guardrails into local traps.json."""
     root = Path(root_dir) if root_dir else Path.cwd()
-    local_traps_path = root / "traps.json"
+    local_traps_path = resolve_traps_path(root)
 
     remote_data = fetch_remote_domain_traps(domain)
     if not remote_data:
@@ -68,6 +68,7 @@ def pull_domain_rules(domain: str, root_dir: Path | str | None = None) -> tuple[
     merged = merge_traps_config(local_raw, remote_data)
     added_count = merged.pop("_added_rules_count", 0)
 
+    local_traps_path.parent.mkdir(parents=True, exist_ok=True)
     local_traps_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
 
     return True, f"Successfully synced community rules for '{domain}'. Merged {added_count} new guardrail rule(s) into {local_traps_path}."
