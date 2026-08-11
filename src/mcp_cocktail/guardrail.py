@@ -105,6 +105,21 @@ def evaluate_rules(
     return messages
 
 
+def build_hook_output(messages: list[str]) -> dict[str, Any]:
+    """Wrap fired trap messages in the PreToolUse hook envelope.
+
+    Claude Code only reads `hookSpecificOutput.additionalContext` on exit 0;
+    any other top-level key is written to the debug log and never reaches the
+    model. See https://code.claude.com/docs/en/hooks.
+    """
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": "\n\n".join(messages),
+        }
+    }
+
+
 def get_state_path(session_id: str) -> Path:
     base = Path(os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp")
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", session_id or "nosession")
@@ -158,12 +173,7 @@ def run_guardrail(traps_path: Path | str | None = None) -> int:
 
     if fired_messages:
         save_state(state_file, state)
-        out = {
-            "hook_name": "mcp-cocktail-trap-check",
-            "messages": fired_messages,
-            "additional_context": "\n\n".join(fired_messages),
-        }
-        print(json.dumps(out, ensure_ascii=False))
+        print(json.dumps(build_hook_output(fired_messages), ensure_ascii=False))
 
     return 0
 
