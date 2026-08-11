@@ -55,13 +55,35 @@ def split_segments(command: str) -> list[str]:
     return segments
 
 
+# Redirect targets that discard rather than persist. Bare `nul` is the Windows
+# device and is case-insensitive; `/dev/null` is not.
+DISCARD_TARGETS = {"/dev/null", "nul", "nul:"}
+
+_TOKEN_END = set(" \t;|&<>")
+
+
+def _redirect_target(command: str, gt_index: int) -> str:
+    """Read the destination token following a `>` at `gt_index`."""
+    i = gt_index + 1
+    while i < len(command) and command[i] == ">":
+        i += 1
+    while i < len(command) and command[i] in " \t":
+        i += 1
+
+    start = i
+    while i < len(command) and command[i] not in _TOKEN_END:
+        i += 1
+
+    return command[start:i].strip("\"'")
+
+
 def has_write_redirect(command: str) -> bool:
-    """True when the command redirects output into a file.
+    """True when the command redirects output into a file that persists.
 
     Scanned over the whole command rather than per-segment, because
     `split_segments` breaks on `&` and would tear `2>&1` in half. Quoted `>`
-    is literal text; `>&` duplicates a file descriptor and writes nothing;
-    `<` only reads.
+    is literal text; `>&` duplicates a file descriptor; `>` onto a null device
+    discards; `<` only reads. None of those are writes.
     """
     in_quote = None
 
@@ -72,9 +94,12 @@ def has_write_redirect(command: str) -> bool:
         elif char in ('"', "'"):
             in_quote = char
         elif char == ">":
-            rest = command[i + 1:].lstrip(">")
-            if not rest.startswith("&"):
-                return True
+            target = _redirect_target(command, i)
+            if not target:
+                continue  # `2>&1` and friends: `&` terminates the token, nothing is written
+            if target.casefold() in DISCARD_TARGETS:
+                continue
+            return True
 
     return False
 

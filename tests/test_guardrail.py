@@ -36,6 +36,23 @@ def test_redirect_is_not_read_only():
     assert not is_read_only("type a.txt > b.txt")
 
 
+def test_discard_targets_are_not_writes():
+    """Field log Finding 7: `2>/dev/null` counted as a write, so is_read_only()
+    returned False and read_only_ignore was defeated on ordinary read commands.
+    Tripped repeatedly during a live audit — false positives are how agents
+    learn to tune a guardrail out."""
+    assert is_read_only("grep -i mcp Packages/manifest.json")
+    assert is_read_only("grep -i mcp Packages/manifest.json 2>/dev/null")
+    assert is_read_only("grep -i mcp Packages/manifest.json 2> /dev/null")
+    assert is_read_only("cat Packages/manifest.json 2>NUL")
+    assert is_read_only("cat Packages/manifest.json >nul")
+
+    # ...while real writes still count, including c18aeae's original case.
+    assert not is_read_only("cat Packages/manifest.json > out.txt")
+    assert not is_read_only('echo x > Packages/manifest.json')
+    assert not is_read_only("cat a.txt > /dev/nullx")
+
+
 def test_redirect_detection_ignores_quotes_and_fd_dups():
     assert is_read_only("git status 2>&1")
     assert is_read_only('grep ">" manifest.json')
