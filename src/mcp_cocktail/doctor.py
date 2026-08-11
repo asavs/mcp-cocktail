@@ -443,37 +443,47 @@ def probe_mcp_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHeal
                 arm.id, arm.name, "OFFLINE", f"Server unreachable at {url} ({msg}).", {}
             )
 
-        if status_code in (200, 204):
-            # A 200 says something answered, not that it speaks MCP. Confirm
-            # with a real handshake before calling the arm READY.
-            is_mcp, detail = speaks_mcp_over_http(url)
-            if not is_mcp:
-                return ArmHealthResult(
-                    arm.id,
-                    arm.name,
-                    "SOCKET_BOUND_ONLY",
-                    f"P4 Warning: {url} answers HTTP {status_code} but is not speaking MCP "
-                    f"({detail}). Something is listening on that port; it is not a usable MCP session.",
-                    {"status": status_code, "handshake": detail},
-                )
-
+        # Something is listening. What it answers to a *GET* settles nothing:
+        # MCP's Streamable HTTP transport carries every request over POST, and
+        # a spec-compliant server rejects a GET that does not ask for an event
+        # stream -- 405 and 406 are the signature of a correct server, not a
+        # broken one. Reading them as a verdict made cocktail report
+        # BOUND_ONLY (P4) for a healthy arm with a live Editor registered
+        # against it: the false negative twin of the false positive this
+        # branch exists to prevent. Ask the question the transport asks.
+        is_mcp, detail = speaks_mcp_over_http(url)
+        if is_mcp:
             return ArmHealthResult(
                 arm.id, arm.name, "READY",
-                f"MCP server reachable at {url} and {detail}.",
+                f"MCP server reachable at {url} and {detail} (GET returned {status_code}).",
                 {"status": status_code, "handshake": detail},
             )
 
-        if status_code in (401, 403, 406):
+        if status_code in (401, 403):
             return ArmHealthResult(
                 arm.id,
                 arm.name,
                 "SOCKET_BOUND_ONLY",
-                f"P4 Warning: Listener bound at {url} but returned HTTP {status_code} ({msg}). Session token or Editor registration required.",
-                {"status": status_code},
+                f"P4 Warning: Listener bound at {url} but rejected the handshake with HTTP "
+                f"{status_code} ({msg}). Session token or Editor registration required.",
+                {"status": status_code, "handshake": detail},
+            )
+
+        if status_code in (200, 204, 405, 406):
+            return ArmHealthResult(
+                arm.id,
+                arm.name,
+                "SOCKET_BOUND_ONLY",
+                f"P4 Warning: {url} answers HTTP {status_code} but did not complete an MCP "
+                f"handshake ({detail}). Something is listening on that port; it is not a "
+                f"usable MCP session.",
+                {"status": status_code, "handshake": detail},
             )
 
         return ArmHealthResult(
-            arm.id, arm.name, "UNCONFIGURED", f"Server returned HTTP {status_code} at {url}.", {"status": status_code}
+            arm.id, arm.name, "UNCONFIGURED",
+            f"Server returned HTTP {status_code} at {url} and did not complete an MCP handshake ({detail}).",
+            {"status": status_code, "handshake": detail},
         )
 
     # 2. If health_check is a non-HTTP shell command (e.g. "unity status --json"), run command probe!

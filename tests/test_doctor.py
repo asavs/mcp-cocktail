@@ -173,19 +173,37 @@ def test_quoted_health_check_arm_probes_the_real_interpreter():
 
 
 @contextlib.contextmanager
-def local_server(handler_body: bytes, content_type: str = "text/plain", status: int = 200):
-    """Serve one canned response on an ephemeral port."""
+def local_server(
+    handler_body: bytes,
+    content_type: str = "text/plain",
+    status: int = 200,
+    post_body: bytes | None = None,
+    post_status: int | None = None,
+):
+    """Serve one canned response on an ephemeral port.
+
+    GET and POST can be given different answers, because for MCP's Streamable
+    HTTP transport they genuinely differ: POST carries the protocol, and GET is
+    only ever an event-stream request, which a compliant server refuses when
+    the Accept header does not ask for one.
+    """
 
     class Handler(BaseHTTPRequestHandler):
-        def _respond(self):
-            self.send_response(status)
+        def _send(self, body: bytes, code: int):
+            self.send_response(code)
             self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(handler_body)))
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(handler_body)
+            self.wfile.write(body)
 
-        do_GET = _respond
-        do_POST = _respond
+        def do_GET(self):
+            self._send(handler_body, status)
+
+        def do_POST(self):
+            self._send(
+                handler_body if post_body is None else post_body,
+                status if post_status is None else post_status,
+            )
 
         def log_message(self, *args):  # keep pytest output clean
             pass
@@ -209,7 +227,7 @@ def test_http_200_from_a_non_mcp_server_is_not_ready():
         res = probe_mcp_arm(arm)
 
     assert res.status == "SOCKET_BOUND_ONLY"
-    assert "not speaking MCP" in res.message
+    assert "did not complete an MCP handshake" in res.message
 
 
 def test_http_200_from_a_real_jsonrpc_endpoint_is_ready():
@@ -221,15 +239,44 @@ def test_http_200_from_a_real_jsonrpc_endpoint_is_ready():
     assert res.status == "READY"
 
 
-def test_406_still_reports_bound_only_without_a_handshake():
-    """coplay-mcp's verified P4 path: the 401/403/406 branch must keep its
-    existing verdict rather than being re-decided by the handshake."""
+JSONRPC_OK = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2024-11-05"}}).encode()
+
+
+def test_406_on_get_does_not_veto_a_server_that_speaks_mcp_on_post():
+    """Refusing a GET is what a *correct* Streamable HTTP MCP server does.
+
+    Treating the GET status as the verdict reported BOUND_ONLY (P4) for
+    coplay-mcp while a live Editor was registered against it -- the false
+    negative twin of the impostor-server false positive. Only the POST
+    handshake can settle it, so it has to be asked before any verdict.
+    """
+    with local_server(b"Not Acceptable", status=406, post_body=JSONRPC_OK, post_status=200) as url:
+        arm = ArmConfig(id="coplay-mcp", name="Coplay", type="mcp", health_check=url)
+        res = probe_mcp_arm(arm)
+
+    assert res.status == "READY"
+    assert "406" in res.message, "the GET status stays visible; it just stops being the verdict"
+
+
+def test_406_with_no_handshake_is_still_bound_only():
+    """The P4 verdict survives for a listener that really cannot serve MCP."""
     with local_server(b"Not Acceptable", status=406) as url:
         arm = ArmConfig(id="coplay-mcp", name="Coplay", type="mcp", health_check=url)
         res = probe_mcp_arm(arm)
 
     assert res.status == "SOCKET_BOUND_ONLY"
     assert "406" in res.message
+    assert "did not complete an MCP handshake" in res.message
+
+
+def test_401_names_the_credential_as_the_blocker():
+    """An authenticated rejection is a different instruction to the operator
+    than a listener that cannot speak the protocol at all."""
+    with local_server(b"Unauthorized", status=401) as url:
+        arm = ArmConfig(id="gated", name="Gated", type="mcp", health_check=url)
+        res = probe_mcp_arm(arm)
+
+    assert res.status == "SOCKET_BOUND_ONLY"
     assert "Session token or Editor registration required" in res.message
 
 
