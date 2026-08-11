@@ -19,7 +19,7 @@ from mcp_cocktail.discover import (
 from mcp_cocktail.doctor import run_doctor, print_doctor_report
 from mcp_cocktail.guardrail import run_guardrail, selftest as guardrail_selftest
 from mcp_cocktail.inbox import append_note, show_inbox
-from mcp_cocktail.installer import install_hook, uninstall_hook
+from mcp_cocktail.installer import DEFAULT_HOOK_MATCHER, install_hook, uninstall_hook
 from mcp_cocktail.miner import cmd_sweep, print_sweep_report, summarize_transcript, parse_blocks
 from mcp_cocktail.proxy import run_proxy
 from mcp_cocktail.runner import create_trial
@@ -372,7 +372,11 @@ def main(argv: list[str] | None = None) -> int:
     p_hook.add_argument("--global", dest="global_settings", action="store_true", help="Target global settings")
     p_hook.add_argument("--settings", help="Explicit path to settings.json")
     p_hook.add_argument("--traps", help="Custom traps.json path for hook")
-    p_hook.add_argument("--matcher", default="Bash|PowerShell|mcp__.*", help="Tool matcher pattern")
+    p_hook.add_argument(
+        "--matcher",
+        default=DEFAULT_HOOK_MATCHER,
+        help="Harness-level tool name filter (default: '*', all tools; rules filter themselves)",
+    )
     p_hook.add_argument("--uninstall", action="store_true", help="Remove mcp-cocktail hook")
 
     p_note = subparsers.add_parser("note", help="Append friction note to findings inbox")

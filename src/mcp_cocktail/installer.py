@@ -14,6 +14,12 @@ from typing import Any
 
 DEFAULT_HOOK_COMMAND = "mcp-cocktail check"
 
+# Harness-level matchers filter by tool name *before* the hook process starts, so
+# anything they exclude is invisible to every rule in traps.json regardless of that
+# rule's own tool_matcher. Subscribe to all tools and let the rules do the filtering:
+# the weakest valid matcher is the one that cannot silently strand a rule.
+DEFAULT_HOOK_MATCHER = "*"
+
 
 def detect_domain_preset(target_dir: Path | str | None = None) -> str:
     """Auto-detect the workspace domain preset based on file signatures."""
@@ -107,7 +113,7 @@ def install_hook_for_harness(
     global_settings: bool = False,
     target_path: str | None = None,
     custom_traps: str | None = None,
-    matcher: str = "Bash|PowerShell|mcp__.*",
+    matcher: str = DEFAULT_HOOK_MATCHER,
 ) -> tuple[bool, str]:
     path = get_harness_settings_path(harness, global_settings, target_path)
     data = load_json_file(path)
@@ -169,7 +175,7 @@ def install_hook(
     global_settings: bool = False,
     target_path: str | None = None,
     custom_traps: str | None = None,
-    matcher: str = "Bash|PowerShell|mcp__.*",
+    matcher: str = DEFAULT_HOOK_MATCHER,
 ) -> tuple[bool, str]:
     """Install hook into ONLY the active harness. Auto-detects runtime environment if harness is None or 'auto'."""
     if not harness or harness.lower().strip() == "auto":
