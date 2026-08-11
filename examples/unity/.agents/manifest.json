@@ -28,7 +28,7 @@
       "mcp_server": "UnityMCP",
       "tool_prefix": "mcp__UnityMCP__",
       "setup_script": "tools/three-way-setup.sh",
-      "health_check": "curl -s http://127.0.0.1:8080/mcp"
+      "health_check": "http://127.0.0.1:8080/mcp"
     },
     {
       "id": "ivanmurzak-mcp",
@@ -36,7 +36,7 @@
       "type": "mcp",
       "mcp_server": "Unity-MCP",
       "tool_prefix": "mcp__ivanmurzak__",
-      "health_check": "curl -s http://127.0.0.1:8082/mcp"
+      "health_check": "http://127.0.0.1:8082/mcp"
     },
     {
       "id": "anklebreaker-mcp",
@@ -44,7 +44,7 @@
       "type": "mcp",
       "mcp_server": "unity-mcp-server",
       "tool_prefix": "mcp__anklebreaker__",
-      "health_check": "curl -s http://127.0.0.1:8083/mcp"
+      "health_check": "http://127.0.0.1:8083/mcp"
     },
     {
       "id": "smithery-toolkit-mcp",
@@ -52,7 +52,7 @@
       "type": "mcp",
       "mcp_server": "unity-editor-toolkit",
       "tool_prefix": "mcp__smithery_toolkit__",
-      "health_check": "curl -s http://127.0.0.1:9500/mcp"
+      "health_check": "http://127.0.0.1:9500/mcp"
     },
     {
       "id": "realvirtual-mcp",
@@ -60,7 +60,7 @@
       "type": "mcp",
       "mcp_server": "io.realvirtual.mcp",
       "tool_prefix": "mcp__realvirtual__",
-      "health_check": "curl -s http://127.0.0.1:8085/mcp"
+      "health_check": "http://127.0.0.1:8085/mcp"
     },
     {
       "id": "akiojin-cli",
