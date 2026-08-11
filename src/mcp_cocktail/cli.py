@@ -17,7 +17,12 @@ from mcp_cocktail.discover import (
     generate_agentic_discover_task,
     merge_manifests,
 )
-from mcp_cocktail.doctor import run_doctor, print_doctor_report, missing_setup_script
+from mcp_cocktail.doctor import (
+    evaluate_requirements,
+    missing_setup_script,
+    print_doctor_report,
+    run_doctor,
+)
 from mcp_cocktail.guardrail import run_guardrail, selftest as guardrail_selftest
 from mcp_cocktail.inbox import append_note, show_inbox
 from mcp_cocktail.installer import DEFAULT_HOOK_MATCHER, install_hook, provision_tree, uninstall_hook
@@ -222,9 +227,27 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     config = CocktailConfig.load(Path.cwd())
     doc_results = run_doctor(config)
     print_doctor_report(doc_results, config)
+
     # Non-zero so `mcp-cocktail doctor && <proceed>` cannot sail through an
     # unconfigured workspace.
-    return 0 if doc_results else 2
+    if not doc_results:
+        return 2
+
+    unmet, unknown = evaluate_requirements(doc_results, args.require or [])
+
+    for arm_id in unknown:
+        known = ", ".join(r.arm_id for r in doc_results)
+        print(f"\n[ERROR] --require {arm_id}: no such arm in this manifest. Known arms: {known}")
+
+    for result in unmet:
+        print(f"\n[ERROR] --require {result.arm_id}: {result.status} — {result.message}")
+
+    if unknown:
+        return 2  # cannot evaluate the requirement
+    if unmet:
+        return 1  # evaluated, and not met
+
+    return 0
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -375,7 +398,13 @@ def main(argv: list[str] | None = None) -> int:
     p_sync.add_argument("--pull", action="store_true", help="Pull latest community guardrails (default)")
     p_sync.add_argument("--push", action="store_true", help="Package locally derived weakness rules for upstream PR submission")
 
-    subparsers.add_parser("doctor", help="Run arm health and diagnostic probes")
+    p_doctor = subparsers.add_parser("doctor", help="Run arm health and diagnostic probes")
+    p_doctor.add_argument(
+        "--require",
+        action="append",
+        metavar="ARM_ID",
+        help="Exit non-zero unless this arm is READY. Repeatable. Without it, doctor reports and exits 0.",
+    )
 
     p_check = subparsers.add_parser("check", help="Run PreToolUse trap guardrail check")
     p_check.add_argument("--traps", help="Path to traps.json")

@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import urllib.request
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,8 +27,8 @@ from mcp_cocktail.console import ensure_utf8_streams
 class ArmHealthResult:
     arm_id: str
     arm_name: str
-    # "READY", "ASSUMED_READY", "SOCKET_BOUND_ONLY", "BOUND_ELSEWHERE",
-    # "UNCONFIGURED", "OFFLINE"
+    # "READY", "ASSUMED_READY", "NOT_RUNNING", "SOCKET_BOUND_ONLY",
+    # "BOUND_ELSEWHERE", "UNCONFIGURED", "OFFLINE"
     status: str
     message: str
     details: dict[str, Any]
@@ -269,11 +270,16 @@ def probe_cli_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHeal
             # A health check that ran and failed is a verdict, not a missing
             # verdict. Falling through to "executable found in PATH" would
             # green-light a dead arm on the strength of its binary existing.
+            #
+            # NOT_RUNNING rather than OFFLINE: the tool is installed and
+            # answered, and told us its backend is down. That is a different
+            # instruction to the operator -- start the backend, or fall back
+            # to this CLI -- than "this tool does not exist here".
             detail = summarize_failure(res.stdout, res.stderr)
             return ArmHealthResult(
                 arm.id,
                 arm.name,
-                "OFFLINE",
+                "NOT_RUNNING",
                 f"Health check '{arm.health_check}' failed (exit {res.returncode}): {detail}",
                 {"returncode": res.returncode, "stderr": res.stderr[:200]},
             )
@@ -515,6 +521,31 @@ def run_doctor(config: CocktailConfig) -> list[ArmHealthResult]:
     return [doctor_check_arm(arm, config.root_dir) for arm in config.arms]
 
 
+READY_STATUSES = ("READY", "ASSUMED_READY")
+
+
+def evaluate_requirements(
+    results: list[ArmHealthResult], required: list[str]
+) -> tuple[list[ArmHealthResult], list[str]]:
+    """Check the arms a caller declared it depends on. Returns (unmet, unknown).
+
+    Deliberately opt-in. A manifest is a survey of competing arms -- the Unity
+    preset lists eleven and nobody has all eleven -- so failing because "some
+    arm is down" would fail permanently for every real user, and a check that
+    always fails gets tuned out. Callers name what they actually need.
+    """
+    by_id = {r.arm_id: r for r in results}
+
+    unknown = [arm_id for arm_id in required if arm_id not in by_id]
+    unmet = [
+        by_id[arm_id]
+        for arm_id in required
+        if arm_id in by_id and by_id[arm_id].status not in READY_STATUSES
+    ]
+
+    return unmet, unknown
+
+
 def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) -> None:
     ensure_utf8_streams()
 
@@ -533,21 +564,29 @@ def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) 
     print(f"{'Arm ID':<18} {'Arm Name':<24} {'Status':<20} {'Diagnostic Summary'}")
     print("-" * 85)
 
-    ready_count = 0
+    labels = {
+        "READY": "[READY]",
+        "ASSUMED_READY": "[ASSUMED_READY]",
+        "NOT_RUNNING": "[NOT_RUNNING]",
+        "SOCKET_BOUND_ONLY": "[BOUND_ONLY (P4)]",
+        "BOUND_ELSEWHERE": "[WRONG_PROJECT (P4)]",
+        "UNCONFIGURED": "[UNCONFIGURED]",
+        "OFFLINE": "[OFFLINE]",
+    }
+
+    tally: Counter[str] = Counter()
     for r in results:
-        if r.status in ("READY", "ASSUMED_READY"):
-            ready_count += 1
-            status_str = "[READY]" if r.status == "READY" else "[ASSUMED_READY]"
-        elif r.status == "SOCKET_BOUND_ONLY":
-            status_str = "[BOUND_ONLY (P4)]"
-        elif r.status == "BOUND_ELSEWHERE":
-            status_str = "[WRONG_PROJECT (P4)]"
-        elif r.status == "UNCONFIGURED":
-            status_str = "[UNCONFIGURED]"
-        else:
-            status_str = "[OFFLINE]"
+        tally[r.status] += 1
+        print(f"{r.arm_id:<18} {r.arm_name:<24} {labels.get(r.status, '[OFFLINE]'):<20} {r.message}")
 
-        print(f"{r.arm_id:<18} {r.arm_name:<24} {status_str:<20} {r.message}")
+    ready_count = sum(tally[s] for s in READY_STATUSES)
 
-    print(f"\nDoctor Summary: {ready_count}/{len(results)} arms READY / ASSUMED_READY.")
+    # Break the rest out by status: "0/11 READY" alone cannot tell an operator
+    # whether to start a backend or install a tool.
+    breakdown = ", ".join(
+        f"{count} {status}" for status, count in tally.most_common() if status not in READY_STATUSES
+    )
+    summary = f"\nDoctor Summary: {ready_count}/{len(results)} arms READY"
+    print(f"{summary} ({breakdown})." if breakdown else f"{summary}.")
+
     sys.stdout.flush()

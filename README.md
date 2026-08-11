@@ -103,10 +103,22 @@ mcp-cocktail doctor
 ```
 
 Reports:
-- 🟢 `[READY]` (CLI active or stdio MCP server initialized with tool count)
-- 🟡 `[BOUND_ONLY (P4)]` (Socket bound but session unauthenticated / unregistered)
-- 🟠 `[UNCONFIGURED]` (Setup script missing or parameter unconfigured)
-- 🔴 `[OFFLINE]` (Process or port unreachable)
+- 🟢 `[READY]` (health check passed, or an MCP `initialize` handshake was acknowledged)
+- 🟡 `[BOUND_ONLY (P4)]` (something is listening, but it is not a usable MCP session — unauthenticated, unregistered, or not speaking MCP at all)
+- 🟡 `[WRONG_PROJECT (P4)]` (arm is live and healthy, but serving a different project than this workspace)
+- 🟠 `[NOT_RUNNING]` (the tool is installed and answered — its backend is down. Start it, or fall back to the CLI)
+- 🟠 `[UNCONFIGURED]` (unreachable *and* its setup script is missing, so it cannot be started)
+- 🔴 `[OFFLINE]` (binary not on PATH, or the port is unreachable — no evidence it is installed)
+
+`doctor` reports and exits 0; a manifest is a survey of competing arms, so it does not
+fail merely because some arm is down. To assert on the arms you actually depend on:
+
+```bash
+mcp-cocktail doctor --require official-unity-cli --require official-unity-mcp
+```
+
+Exits `1` if a required arm is not READY, `2` if a requirement names an unknown arm or the
+workspace has no manifest at all.
 
 ### 3. Native MCP Server Interface (`mcp-cocktail serve`) & Transparent Proxy (`mcp-cocktail proxy`)
 Mount `mcp-cocktail` directly into your agent's MCP config (`.claude/settings.json` or `mcp.json`) to expose native tools or wrap target MCP servers:

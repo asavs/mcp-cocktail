@@ -10,6 +10,9 @@ from pathlib import Path
 from mcp_cocktail.config import CocktailConfig, ArmConfig
 from mcp_cocktail.doctor import (
     MAX_REPORTED_FIELDS,
+    READY_STATUSES,
+    ArmHealthResult,
+    evaluate_requirements,
     check_arm_binding,
     describe_binding,
     describe_instance,
@@ -58,16 +61,44 @@ def test_shell_wrapped_url_never_reaches_the_http_probe():
     assert "unreachable at" in probe_mcp_arm(bare).message
 
 
-def test_failed_health_check_is_offline_not_ready():
+def test_failed_health_check_reports_not_running_not_ready():
     """A health check that runs and fails must not fall through to
-    'executable found in PATH'. Surfaced by repairing the probe binary
-    resolver: once the health_check's own binary is resolvable, a failing
-    check reached the trailing READY and green-lit a dead arm."""
+    'executable found in PATH'. It is also not OFFLINE: the tool is installed
+    and answered, and said its backend is down. Start the backend vs install
+    the tool are different instructions to the operator."""
     arm = ArmConfig(id="failing", name="Failing", type="cli",
                     health_check="python -c \"import sys; sys.exit(3)\"")
     res = probe_cli_arm(arm)
-    assert res.status == "OFFLINE"
+    assert res.status == "NOT_RUNNING"
+    assert res.status not in READY_STATUSES
     assert "exit 3" in res.message
+
+
+def test_missing_binary_stays_offline():
+    """The discriminator: nothing answered, so we have no evidence the tool
+    is even installed."""
+    arm = ArmConfig(id="absent", name="Absent", type="cli",
+                    command="nonexistent_binary_xyz_123",
+                    health_check="nonexistent_binary_xyz_123 --version")
+    assert probe_cli_arm(arm).status == "OFFLINE"
+
+
+def test_evaluate_requirements():
+    results = [
+        ArmHealthResult("up", "Up", "READY", "fine", {}),
+        ArmHealthResult("assumed", "Assumed", "ASSUMED_READY", "probably", {}),
+        ArmHealthResult("down", "Down", "NOT_RUNNING", "start it", {}),
+    ]
+
+    assert evaluate_requirements(results, []) == ([], [])
+    assert evaluate_requirements(results, ["up", "assumed"]) == ([], [])
+
+    unmet, unknown = evaluate_requirements(results, ["up", "down"])
+    assert [r.arm_id for r in unmet] == ["down"]
+    assert unknown == []
+
+    unmet, unknown = evaluate_requirements(results, ["typo-arm"])
+    assert unmet == [] and unknown == ["typo-arm"]
 
 
 def test_silent_success_still_counts_as_ready():
