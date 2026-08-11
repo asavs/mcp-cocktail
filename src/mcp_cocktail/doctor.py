@@ -238,16 +238,26 @@ def resolve_probe_binary(arm: ArmConfig) -> str:
 def probe_cli_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHealthResult:
     cmd_name = resolve_probe_binary(arm)
     executable = shutil.which(cmd_name)
+    shell_check = arm.health_check if (arm.health_check and not arm.health_check.startswith("http")) else ""
 
-    if not executable:
+    # shutil.which() answers about *this* process's PATH. The health check runs
+    # in a child shell resolving against its own, and the two disagree in
+    # ordinary setups: shims and wrapper scripts, .cmd/.bat shadowing on
+    # Windows, a login profile that extends PATH for the shell only, or a PATH
+    # edited after this process started. When they disagree, the precheck's
+    # verdict is about the wrong process -- it reported OFFLINE for arms whose
+    # health check runs perfectly well one line later. A declared health check
+    # is the authority on whether its own command runs, so run it and report
+    # what happened. The precheck only decides for arms that never gave us one.
+    if not executable and not shell_check:
         return ArmHealthResult(
             arm.id, arm.name, "OFFLINE", f"CLI executable '{cmd_name}' not found in PATH.", {}
         )
 
-    if arm.health_check and not arm.health_check.startswith("http"):
+    if shell_check:
         try:
             res = subprocess.run(
-                arm.health_check,
+                shell_check,
                 shell=True,
                 capture_output=True,
                 text=True,
@@ -259,9 +269,9 @@ def probe_cli_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHeal
                     return misbound
 
                 serving = describe_binding(arm, res.stdout, workspace_root)
-                summary = f"Health check command '{arm.health_check}' active and responding."
+                summary = f"Health check command '{shell_check}' active and responding."
                 if serving:
-                    summary = f"Health check command '{arm.health_check}' active — {serving}."
+                    summary = f"Health check command '{shell_check}' active — {serving}."
 
                 return ArmHealthResult(
                     arm.id, arm.name, "READY", summary, {"stdout": res.stdout[:200], "serving": serving}
@@ -276,16 +286,32 @@ def probe_cli_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHeal
             # instruction to the operator -- start the backend, or fall back
             # to this CLI -- than "this tool does not exist here".
             detail = summarize_failure(res.stdout, res.stderr)
+
+            # Both resolvers agreeing the binary is absent is the only case
+            # where "this tool does not exist here" is the honest verdict.
+            if not executable:
+                return ArmHealthResult(
+                    arm.id,
+                    arm.name,
+                    "OFFLINE",
+                    f"CLI executable '{cmd_name}' not found in PATH, and health check "
+                    f"'{shell_check}' failed (exit {res.returncode}): {detail}",
+                    {"returncode": res.returncode, "stderr": res.stderr[:200]},
+                )
+
             return ArmHealthResult(
                 arm.id,
                 arm.name,
                 "NOT_RUNNING",
-                f"Health check '{arm.health_check}' failed (exit {res.returncode}): {detail}",
+                f"Health check '{shell_check}' failed (exit {res.returncode}): {detail}",
                 {"returncode": res.returncode, "stderr": res.stderr[:200]},
             )
         except subprocess.TimeoutExpired:
+            # A command that hung is a command that ran, whatever this
+            # process's PATH says about it.
+            located = f"found at {executable}" if executable else "resolved by the child shell"
             return ArmHealthResult(
-                arm.id, arm.name, "ASSUMED_READY", f"Executable '{cmd_name}' found at {executable} (health check timed out).", {}
+                arm.id, arm.name, "ASSUMED_READY", f"Executable '{cmd_name}' {located} (health check timed out).", {}
             )
         except Exception as e:
             return ArmHealthResult(
@@ -448,9 +474,9 @@ def probe_mcp_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHeal
         # a spec-compliant server rejects a GET that does not ask for an event
         # stream -- 405 and 406 are the signature of a correct server, not a
         # broken one. Reading them as a verdict made cocktail report
-        # BOUND_ONLY (P4) for a healthy arm with a live Editor registered
-        # against it: the false negative twin of the false positive this
-        # branch exists to prevent. Ask the question the transport asks.
+        # BOUND_ONLY (P4) for healthy arms with a live session attached, which
+        # is the false negative twin of the false positive this branch exists
+        # to prevent. Ask the question the transport actually asks.
         is_mcp, detail = speaks_mcp_over_http(url)
         if is_mcp:
             return ArmHealthResult(

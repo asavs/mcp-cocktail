@@ -2,6 +2,7 @@
 
 import contextlib
 import json
+import shutil
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -32,6 +33,23 @@ def test_probe_cli_arm_offline():
     arm = ArmConfig(id="nonexistent-cli", name="Fake CLI", type="cli", command="nonexistent_binary_xyz_123")
     res = probe_cli_arm(arm)
     assert res.status == "OFFLINE"
+
+
+def test_health_check_runs_even_when_the_precheck_cannot_find_the_binary():
+    """The child shell, not this process, decides what its own PATH resolves.
+
+    shutil.which() and `shell=True` are two different resolvers -- shims,
+    .cmd shadowing, a profile that extends PATH for the shell only -- and the
+    precheck was short-circuiting to OFFLINE for arms whose health check runs
+    fine one line later. A shell builtin is the cleanest portable stand-in for
+    "runs in the shell, absent from PATH".
+    """
+    arm = ArmConfig(id="builtin", name="Builtin", type="cli",
+                    command="nonexistent_binary_xyz_123", health_check="exit 0")
+    assert shutil.which("nonexistent_binary_xyz_123") is None
+    res = probe_cli_arm(arm)
+
+    assert res.status == "READY", res.message
 
 
 def test_probe_mcp_arm_offline():
@@ -74,12 +92,17 @@ def test_failed_health_check_reports_not_running_not_ready():
 
 
 def test_missing_binary_stays_offline():
-    """The discriminator: nothing answered, so we have no evidence the tool
-    is even installed."""
+    """The discriminator: both resolvers agree nothing is there, so we have no
+    evidence the tool is even installed. The precheck stopped being a veto, but
+    it is still evidence -- when the health check also fails, the missing binary
+    and the check's own verdict are reported together."""
     arm = ArmConfig(id="absent", name="Absent", type="cli",
                     command="nonexistent_binary_xyz_123",
                     health_check="nonexistent_binary_xyz_123 --version")
-    assert probe_cli_arm(arm).status == "OFFLINE"
+    res = probe_cli_arm(arm)
+
+    assert res.status == "OFFLINE"
+    assert "not found in PATH" in res.message
 
 
 def test_evaluate_requirements():
@@ -182,10 +205,10 @@ def local_server(
 ):
     """Serve one canned response on an ephemeral port.
 
-    GET and POST can be given different answers, because for MCP's Streamable
-    HTTP transport they genuinely differ: POST carries the protocol, and GET is
-    only ever an event-stream request, which a compliant server refuses when
-    the Accept header does not ask for one.
+    GET and POST can differ, because for MCP's Streamable HTTP transport they
+    genuinely do: POST carries the protocol and GET is only ever an event-stream
+    request, which a compliant server refuses when the Accept header does not
+    ask for one.
     """
 
     class Handler(BaseHTTPRequestHandler):
@@ -243,7 +266,7 @@ JSONRPC_OK = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion"
 
 
 def test_406_on_get_does_not_veto_a_server_that_speaks_mcp_on_post():
-    """Refusing a GET is what a *correct* Streamable HTTP MCP server does.
+    """Rejecting a GET is what a *correct* Streamable HTTP MCP server does.
 
     Treating the GET status as the verdict reported BOUND_ONLY (P4) for
     coplay-mcp while a live Editor was registered against it -- the false
