@@ -11,8 +11,10 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
+import urllib.parse
 import urllib.request
 from collections import Counter
 from dataclasses import dataclass
@@ -227,7 +229,7 @@ def resolve_probe_binary(arm: ArmConfig) -> str:
     about to run -- probe for that instead.
     """
     hc = (arm.health_check or "").strip()
-    if hc and not hc.startswith(("http://", "https://")):
+    if hc and not hc.startswith(("http://", "https://", "ws://", "wss://")):
         first_token = first_command_token(hc)
         if first_token:
             return first_token
@@ -378,6 +380,92 @@ def speaks_mcp_over_http(url: str, timeout: int = 2) -> tuple[bool, str]:
     return False, "no JSON-RPC response to initialize"
 
 
+LIVENESS_PATH = "/__mcp_liveness__"
+
+
+def probe_websocket_listener(host: str, port: int, timeout: float = 2.0) -> tuple[str, str]:
+    """Liveness of a WebSocket listener, without opening a real session.
+
+    Modelled on mcp-unity's own probe (McpUnityServer.cs). Two details are
+    load-bearing and neither is guessable:
+
+    A completed TCP connect is *not* proof of health. The documented Windows
+    failure mode binds the port and accepts connections, then never answers --
+    the Editor reports healthy while every client hangs forever. Connect-only
+    checking reports a green light for exactly that state, which is the P4
+    shape this tool exists to catch. So we write a handshake and require an
+    answer, treating a held-open silent socket as bound-but-unusable.
+
+    The request deliberately targets a bogus path rather than the real service
+    path: a healthy server rejects it with 501 and closes, which proves the
+    accept loop is alive without registering a client session in the Editor UI.
+    Probing the real path would make the diagnostic show up as a connected
+    client, changing what it measures.
+    """
+    request = (
+        f"GET {LIVENESS_PATH} HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: bWNwLWNvY2t0YWlsLXByb2Jl\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n"
+    ).encode("ascii")
+
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            sock.sendall(request)
+            try:
+                data = sock.recv(256)
+            except socket.timeout:
+                return "SOCKET_BOUND_ONLY", (
+                    "accepted the connection then never answered the handshake -- the known "
+                    "hung-listener state; restarting the server does not clear it, restarting "
+                    "the Editor does"
+                )
+
+        if data:
+            first = data.split(b"\r\n", 1)[0].decode("ascii", errors="replace")
+            return "READY", f"WebSocket listener answered the handshake ({first})"
+
+        # A clean close is still the accept loop doing its job.
+        return "READY", "WebSocket listener accepted and closed the probe cleanly"
+
+    except ConnectionRefusedError:
+        return "NOT_RUNNING", "nothing is listening on that port"
+    except (socket.timeout, TimeoutError):
+        # Not OFFLINE, and not the same as refused. Whether a closed loopback
+        # port refuses or silently drops is platform- and firewall-dependent --
+        # this box times out where Linux refuses -- so classifying the two
+        # differently would make the verdict a property of the machine. Both
+        # mean nothing usable is there, and for an Editor-hosted listener the
+        # operator's next move is identical: open the project and start it.
+        return "NOT_RUNNING", "nothing answered the connection attempt (not started, or a firewall dropped it)"
+    except OSError as e:
+        return "OFFLINE", f"connection failed ({e})"
+
+
+def probe_websocket_arm(arm: ArmConfig, url: str) -> ArmHealthResult:
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port
+
+    if not port:
+        return ArmHealthResult(
+            arm.id, arm.name, "UNCONFIGURED",
+            f"health_check '{url}' names no port, so there is nothing to probe.", {},
+        )
+
+    status, detail = probe_websocket_listener(host, port)
+    prefix = "P4 Warning: " if status == "SOCKET_BOUND_ONLY" else ""
+
+    return ArmHealthResult(
+        arm.id, arm.name, status,
+        f"{prefix}{host}:{port} {detail}.",
+        {"host": host, "port": port},
+    )
+
+
 def probe_stdio_mcp_arm(arm: ArmConfig) -> ArmHealthResult:
     """Probe a stdio MCP server directly by spawning the process and sending JSON-RPC initialize."""
     target_cmd = arm.command or arm.mcp_server or arm.id
@@ -458,6 +546,12 @@ def probe_stdio_mcp_arm(arm: ArmConfig) -> ArmHealthResult:
 
 def probe_mcp_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHealthResult:
     hc = (arm.health_check or "").strip()
+
+    # 0. A ws:// endpoint is not reachable by any HTTP or PATH probe. Several
+    #    Unity arms host the session inside the Editor over WebSocket, so
+    #    without this branch their only honest setting was "cannot be checked".
+    if hc.startswith(("ws://", "wss://")):
+        return probe_websocket_arm(arm, hc)
 
     # 1. If health_check is an HTTP URL, probe HTTP
     if hc.startswith("http://") or hc.startswith("https://"):
@@ -662,7 +756,7 @@ def shared_probe_binaries(config: CocktailConfig) -> dict[str, list[str]]:
         if arm.probe != "auto":
             continue
         hc = (arm.health_check or "").strip()
-        if hc.startswith(("http://", "https://")):
+        if hc.startswith(("http://", "https://", "ws://", "wss://")):
             continue
         binary = resolve_probe_binary(arm)
         if binary:

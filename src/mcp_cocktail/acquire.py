@@ -68,6 +68,10 @@ def render_arm_plan(arm: ArmConfig) -> list[str]:
         for line in client_lines:
             lines.append(f"{INDENT}{INDENT}{line}")
 
+    if install.get("repair_command"):
+        lines.append(f"{INDENT}if it is already installed but broken:")
+        lines.append(f"{INDENT}{INDENT}{install['repair_command']}")
+
     if install.get("docs_url"):
         lines.append(f"{INDENT}docs: {install['docs_url']}")
 

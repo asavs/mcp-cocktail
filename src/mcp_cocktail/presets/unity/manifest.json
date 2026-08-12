@@ -237,6 +237,49 @@
         "cli",
         "ci"
       ]
+    },
+    {
+      "id": "codergamester-mcp",
+      "name": "CoderGamester MCP Unity",
+      "type": "mcp",
+      "mcp_server": "mcp-unity",
+      "tool_prefix": "mcp__mcp-unity__",
+      "capabilities": [
+        "editor-automation",
+        "mcp"
+      ],
+      "health_check": "ws://127.0.0.1:8090",
+      "probe": "websocket",
+      "probe_reason": "The Editor hosts a websocket-sharp listener; there is no HTTP endpoint.",
+      "install_hint": "Unity Package Manager git URL https://github.com/CoderGamester/mcp-unity.git (the package builds the Node bridge itself)",
+      "install": {
+        "method": "upm-git",
+        "package_url": "https://github.com/CoderGamester/mcp-unity.git",
+        "docs_url": "https://github.com/CoderGamester/mcp-unity",
+        "requires_editor": true,
+        "steps": [
+          "Install Node.js 18+ (npm 9+ to build).",
+          "Unity: Window > Package Manager > '+' > 'Add package from git URL...' > the URL below.",
+          "Let the import finish. On Editor load the package runs npm install + npm run build in <package>/Server~ to produce Server~/build/index.js. If it is missing, use Tools > MCP Unity > Server Window > 'Force Install Server'.",
+          "Configure the client with Tools > MCP Unity > Server Window > 'Configure <client>' -- it writes the absolute path and the settings env var for you.",
+          "Tools > MCP Unity > Server Window > 'Start Server' (AutoStartServer defaults to true)."
+        ],
+        "client_config": {
+          "mcpServers": {
+            "mcp-unity": {
+              "command": "node",
+              "args": [
+                "ABSOLUTE/PATH/TO/mcp-unity/Server~/build/index.js"
+              ],
+              "env": {
+                "MCP_UNITY_SETTINGS_PATH": "<unity project>/ProjectSettings/McpUnitySettings.json"
+              }
+            }
+          }
+        },
+        "repair_command": "cd <package>/Server~ && npm install && npm run build",
+        "note": "There is no one-line install: the Node bridge is not published for npx and is built by the Unity package at Editor load. Do NOT run `npx mcp-unity-server` -- that npm package is a stale 1.0.0 from April 2025 by the same author, four minor versions behind the 1.4.0 package, and it resolves, so it looks plausible and runs the wrong code. The trailing tilde in `Server~` is required (Unity ignores `~` folders). The package-cache path carries a version hash that changes on every update and silently breaks a hard-coded client config -- re-run the Configure button after updating. Port 8090 is overridable with UNITY_PORT; UNITY_HOST defaults to localhost. README says Unity 6+, package.json enforces 2022.3. Entering Play Mode triggers a domain reload that drops the bridge."
+      }
     }
   ],
   "trial_defaults": {

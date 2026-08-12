@@ -135,8 +135,17 @@ To add a new software domain (e.g., `postgres`, `docker`, `figma`):
    |---|---|
    | `auto` (default) | probe normally; a URL `health_check` is an MCP endpoint and must complete a JSON-RPC handshake |
    | `http` | the URL is a plain liveness endpoint, not MCP — 2xx means healthy |
-   | `none` | real project, no automatable check (port derived per project, WebSocket-only, …) |
+   | `websocket` | `health_check` is a `ws://host:port` URL; probed with a handshake, not a bare connect |
+   | `none` | real project, no automatable check (port derived per project, no reachable endpoint, …) |
    | `unverified` | the entry could not be tied to a real upstream project |
+
+   `websocket` exists because a completed TCP connect is not proof of health. mcp-unity has a
+   documented Windows state where the port binds and accepts connections but never answers — the
+   Editor reports healthy while every client hangs forever. A connect-only check calls that READY,
+   which is the exact P4 green light this tool exists to catch, so the probe writes a handshake and
+   requires an answer, reporting a held-open silent socket as `BOUND_ONLY (P4)`. It deliberately
+   targets a bogus path rather than the real service path: a healthy server rejects it with 501,
+   which proves the accept loop is alive without registering a client session in the Editor UI.
 
    `none` and `unverified` require a `probe_reason`. Both skip probing entirely, because a probe
    against an endpoint nobody could confirm manufactures a precise-sounding failure — "unreachable

@@ -3,6 +3,7 @@
 import contextlib
 import json
 import shutil
+import socket
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -305,6 +306,108 @@ def test_collision_is_reported_only_when_it_actually_inflates_the_count(capsys):
     out = capsys.readouterr().out
     assert "P4 Warning" in out
     assert "unity-cli" in out
+
+
+@contextlib.contextmanager
+def ws_listener(behaviour: str):
+    """A raw TCP listener standing in for a WebSocket server.
+
+    `answer` replies 501 and closes, as a healthy websocket-sharp listener does
+    for an unknown path. `hang` accepts and then never speaks, which is the
+    documented Windows failure mode.
+    """
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    stop = threading.Event()
+
+    def serve():
+        server.settimeout(0.5)
+        while not stop.is_set():
+            try:
+                conn, _ = server.accept()
+            except (socket.timeout, OSError):
+                continue
+            with conn:
+                try:
+                    conn.recv(1024)
+                    if behaviour == "answer":
+                        conn.sendall(b"HTTP/1.1 501 Not Implemented\r\n\r\n")
+                    else:
+                        stop.wait(3)  # hold it open, saying nothing
+                except OSError:
+                    pass
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        yield server.getsockname()[1]
+    finally:
+        stop.set()
+        server.close()
+        thread.join(timeout=2)
+
+
+def test_websocket_listener_answering_the_handshake_is_ready():
+    with ws_listener("answer") as port:
+        arm = ArmConfig(id="cg", name="CG", type="mcp",
+                        health_check=f"ws://127.0.0.1:{port}", probe="websocket")
+        res = probe_mcp_arm(arm)
+
+    assert res.status == "READY"
+    assert "501" in res.message
+
+
+def test_websocket_listener_that_accepts_then_goes_silent_is_bound_only():
+    """The failure this probe exists for. mcp-unity's known Windows state binds
+    the port and accepts connections, then never answers -- the Editor reports
+    healthy while every client hangs. A connect-only check calls that READY,
+    which is precisely the P4 green light the tool is built to catch."""
+    with ws_listener("hang") as port:
+        arm = ArmConfig(id="cg", name="CG", type="mcp",
+                        health_check=f"ws://127.0.0.1:{port}", probe="websocket")
+        res = probe_mcp_arm(arm)
+
+    assert res.status == "SOCKET_BOUND_ONLY"
+    assert res.status not in READY_STATUSES
+    assert "never answered" in res.message
+
+
+def test_websocket_probe_on_a_closed_port_is_not_running():
+    arm = ArmConfig(id="cg", name="CG", type="mcp",
+                    health_check="ws://127.0.0.1:59997", probe="websocket")
+    res = probe_mcp_arm(arm)
+
+    # Whether a closed loopback port refuses or silently drops is platform- and
+    # firewall-dependent, so both must land on the same verdict or the result
+    # becomes a property of the machine running the test.
+    assert res.status == "NOT_RUNNING", res.message
+    assert "nothing" in res.message
+
+
+def test_ws_url_is_never_mistaken_for_a_shell_command():
+    """resolve_probe_binary treats any non-http health_check as a shell command,
+    so an unguarded ws:// URL would be looked up on PATH as a binary."""
+    arm = ArmConfig(id="cg", name="CG", type="mcp", mcp_server="mcp-unity",
+                    health_check="ws://127.0.0.1:8090", probe="websocket")
+    assert resolve_probe_binary(arm) == "mcp-unity"
+
+    config = CocktailConfig(name="x", description="", arms=[arm])
+    assert shared_probe_binaries(config) == {}
+
+
+def test_codergamester_arm_is_wired_up():
+    config = CocktailConfig.load(PRESETS_DIR / "unity" / "manifest.json")
+    arm = next(a for a in config.arms if a.id == "codergamester-mcp")
+
+    assert arm.mcp_server == "mcp-unity"
+    assert arm.health_check.startswith("ws://")
+    assert arm.install["package_url"].endswith("mcp-unity.git")
+    # The stale npm package resolves, so a plausible-looking npx command would
+    # run April-2025 code against a 1.4.0 package. Warn, never emit it.
+    assert "npx mcp-unity-server" not in json.dumps(arm.install).replace("Do NOT run `npx mcp-unity-server`", "")
+    assert "stale" in arm.install["note"]
 
 
 def test_evaluate_requirements():

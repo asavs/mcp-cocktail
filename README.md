@@ -96,7 +96,8 @@ mcp-cocktail discover --domain unity --agentic
 ```
 
 ### 2. Validate Arm Health (`mcp-cocktail doctor`)
-Probe CLI binary PATHs, stdio MCP `initialize` capabilities, and HTTP endpoints to report an honest status summary:
+Probe CLI binary PATHs, stdio MCP `initialize` capabilities, HTTP endpoints, and WebSocket
+listeners to report an honest status summary:
 
 ```bash
 mcp-cocktail doctor
@@ -104,7 +105,7 @@ mcp-cocktail doctor
 
 Reports:
 - 🟢 `[READY]` (health check passed, or an MCP `initialize` handshake was acknowledged)
-- 🟡 `[BOUND_ONLY (P4)]` (something is listening, but it is not a usable MCP session — unauthenticated, unregistered, or not speaking MCP at all)
+- 🟡 `[BOUND_ONLY (P4)]` (something is listening, but it is not a usable MCP session — unauthenticated, unregistered, not speaking MCP at all, or accepting connections and then never answering)
 - 🟡 `[WRONG_PROJECT (P4)]` (arm is live and healthy, but serving a different project than this workspace)
 - 🟠 `[NOT_RUNNING]` (the tool is installed and answered — its backend is down. Start it, or fall back to the CLI)
 - 🟠 `[UNCONFIGURED]` (unreachable *and* its setup script is missing; or not probed at all, because
