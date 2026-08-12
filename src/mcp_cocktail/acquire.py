@@ -171,7 +171,14 @@ def render_install_plan(config: CocktailConfig, arm_ids: list[str] | None = None
         out.extend(render_arm_plan(arm))
         out.append("")
 
-    routed = sum(1 for a in selected if a.install or a.setup_script)
+    # An install block that exists only to record "no route found" is not a
+    # route. Counting it produced a summary contradicting the body directly
+    # above it -- eight real routes reported as nine.
+    routed = sum(
+        1 for a in selected
+        if a.setup_script
+        or (a.install and a.install.get("method") not in (None, "unknown") and a.probe != "unverified")
+    )
     out.append(f"{routed}/{len(selected)} arm(s) record an install route.")
     out.append("These steps are printed, never executed: they install third-party software")
     out.append("and several need choices only you can make (which Unity project, which port).")

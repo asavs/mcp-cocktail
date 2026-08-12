@@ -843,3 +843,106 @@ def test_run_doctor():
     assert len(results) == 2
     assert results[0].status == "READY"
     assert results[1].status == "OFFLINE"
+
+
+# --- Regressions from the 2026-08-12 usability run -------------------------
+
+def test_version_flag_does_not_earn_ready():
+    """Field run: hatayama-loop reported READY because `uloop --version`
+    answered, and its first real Unity call failed -- the project-side package
+    had never been installed. A version probe is evidence of installation and
+    nothing more."""
+    arm = ArmConfig(id="versiony", name="Versiony", type="cli",
+                    command="python", health_check="python --version")
+    res = probe_cli_arm(arm)
+
+    assert res.status == "INSTALLED_ONLY"
+    assert res.status not in READY_STATUSES, "a binary existing is not an arm that works"
+    assert "installed" in res.message
+
+
+def test_capability_check_is_what_earns_ready():
+    arm = ArmConfig(id="proven", name="Proven", type="cli", command="python",
+                    health_check="python --version", capability_check="python -c \"pass\"")
+    assert probe_cli_arm(arm).status == "READY"
+
+    failing = ArmConfig(id="unproven", name="Unproven", type="cli", command="python",
+                        health_check="python --version",
+                        capability_check="python -c \"import sys; sys.exit(4)\"")
+    res = probe_cli_arm(failing)
+    assert res.status == "NOT_RUNNING"
+    assert "capability check" in res.message.lower()
+
+
+def test_headline_does_not_count_arms_it_is_about_to_disown(capsys):
+    """Field run: three arms answering one `unity-cli --version` produced three
+    READYs and a warning saying at most one is real -- the number and the prose
+    contradicting each other on the same screen."""
+    config = CocktailConfig(
+        name="x", description="",
+        arms=[ArmConfig(id=n, name=n, type="cli", command="unity-cli",
+                        health_check="unity-cli --version") for n in ("a", "b", "c")],
+    )
+    results = [ArmHealthResult(n, n, "READY", "ok", {}) for n in ("a", "b", "c")]
+    print_doctor_report(results, config)
+
+    out = capsys.readouterr().out
+    assert "1/3 arms READY" in out, "at most one of a collision group can be the real install"
+    assert "+2 indistinguishable" in out
+    assert "P4 Warning" in out
+
+
+def test_collision_warning_survives_the_demotion_to_installed_only(capsys):
+    """Demoting version-only arms out of READY must not also silence the
+    warning about them: the collision is about which program owns the name."""
+    config = CocktailConfig(
+        name="x", description="",
+        arms=[ArmConfig(id=n, name=n, type="cli", command="unity-cli",
+                        health_check="unity-cli --version") for n in ("a", "b")],
+    )
+    results = [ArmHealthResult(n, n, "INSTALLED_ONLY", "installed", {}) for n in ("a", "b")]
+    print_doctor_report(results, config)
+
+    assert "P4 Warning" in capsys.readouterr().out
+
+
+def test_arms_sharing_a_stack_on_purpose_are_not_a_collision():
+    """Field run: doctor claimed at most one of official-unity-cli and
+    official-unity-mcp could really be installed. They are one product reached
+    two ways, so the claim was simply false."""
+    config = CocktailConfig(
+        name="x", description="",
+        arms=[
+            ArmConfig(id="cli", name="CLI", type="cli", command="unity",
+                      health_check="unity status --json", binary_group="unity-official"),
+            ArmConfig(id="mcp", name="MCP", type="mcp", mcp_server="u",
+                      health_check="unity status --json", binary_group="unity-official"),
+        ],
+    )
+    assert shared_probe_binaries(config) == {}
+
+
+def test_shipped_preset_does_not_flag_the_official_arms():
+    config = CocktailConfig.load(PRESETS_DIR / "unity" / "manifest.json")
+    collisions = shared_probe_binaries(config)
+
+    assert "unity" not in collisions, "the official CLI and MCP are one install by design"
+    assert set(collisions.get("unity-cli", [])) == {"akiojin-cli", "youngwoo-cli", "rage-cli"}
+
+
+def test_no_arm_ships_the_invalid_ivanmurzak_subpath():
+    """Field run: the git URL recorded here pointed at
+    Unity-MCP-Plugin/Assets/root, which does not exist. Unity answers a bad UPM
+    git URL with a blocking modal -- 10 minutes lost to a value that was never
+    verified before shipping."""
+    config = CocktailConfig.load(PRESETS_DIR / "unity" / "manifest.json")
+
+    for arm in config.arms:
+        install = arm.install or {}
+        # The note may (and does) explain why the path was removed. What must
+        # not survive is anything a reader or an agent would act on.
+        actionable = json.dumps([
+            install.get("package_url"), install.get("command"),
+            [s for s in (install.get("steps") or []) if isinstance(s, dict)],
+        ])
+        assert "Assets/root" not in actionable, f"{arm.id} still ships the invalid subpath"

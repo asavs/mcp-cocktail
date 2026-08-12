@@ -31,7 +31,7 @@ from mcp_cocktail.console import ensure_utf8_streams
 class ArmHealthResult:
     arm_id: str
     arm_name: str
-    # "READY", "ASSUMED_READY", "NOT_RUNNING", "SOCKET_BOUND_ONLY",
+    # "READY", "ASSUMED_READY", "INSTALLED_ONLY", "NOT_RUNNING", "SOCKET_BOUND_ONLY",
     # "BOUND_ELSEWHERE", "UNCONFIGURED", "OFFLINE"
     status: str
     message: str
@@ -239,6 +239,62 @@ def resolve_probe_binary(arm: ArmConfig) -> str:
     return arm.command or arm.mcp_server or arm.id
 
 
+VERSION_ONLY_FLAGS = {"--version", "-v", "-V", "--v", "-version", "version"}
+
+
+def proves_installation_only(health_check: str) -> bool:
+    """Whether a health check can only establish that the binary exists.
+
+    `uloop --version` answering says a program is installed. It says nothing
+    about whether the editor-side package it drives is present -- and the field
+    report caught exactly that: READY on the version flag, then the first real
+    call failed because the Unity package had never been added. A version probe
+    is evidence of installation and must not be dressed up as capability.
+    """
+    if not health_check:
+        return False
+
+    try:
+        tokens = [t.strip("\"'") for t in shlex.split(health_check, posix=False)]
+    except ValueError:
+        tokens = health_check.split()
+
+    return len(tokens) == 2 and tokens[1].lower() in VERSION_ONLY_FLAGS
+
+
+def run_capability_check(arm: ArmConfig) -> ArmHealthResult | None:
+    """Run the arm's proof-of-work command. None when it declares none."""
+    if not arm.capability_check:
+        return None
+
+    try:
+        res = subprocess.run(
+            arm.capability_check, shell=True, capture_output=True, text=True, timeout=20
+        )
+    except subprocess.TimeoutExpired:
+        return ArmHealthResult(
+            arm.id, arm.name, "NOT_RUNNING",
+            f"Capability check '{arm.capability_check}' timed out; the arm is installed but not answering.",
+            {},
+        )
+    except Exception as e:
+        return ArmHealthResult(arm.id, arm.name, "NOT_RUNNING", f"Capability check failed: {e}", {})
+
+    if res.returncode != 0:
+        return ArmHealthResult(
+            arm.id, arm.name, "NOT_RUNNING",
+            f"Installed, but capability check '{arm.capability_check}' failed "
+            f"(exit {res.returncode}): {summarize_failure(res.stdout, res.stderr)}",
+            {"returncode": res.returncode},
+        )
+
+    return ArmHealthResult(
+        arm.id, arm.name, "READY",
+        f"Capability check '{arm.capability_check}' succeeded — this arm can do real work.",
+        {"capability": True},
+    )
+
+
 def probe_cli_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHealthResult:
     cmd_name = resolve_probe_binary(arm)
     executable = shutil.which(cmd_name)
@@ -276,6 +332,24 @@ def probe_cli_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHeal
                 summary = f"Health check command '{shell_check}' active and responding."
                 if serving:
                     summary = f"Health check command '{shell_check}' active — {serving}."
+
+                # An arm that says how to prove itself gets held to that.
+                proven = run_capability_check(arm)
+                if proven:
+                    return proven
+
+                # Otherwise, do not promote a version flag into a capability
+                # claim. INSTALLED_ONLY sits outside READY_STATUSES on purpose:
+                # the headline count is the number the field report caught
+                # lying, and a binary existing is not an arm that works.
+                if proves_installation_only(shell_check) and not serving:
+                    return ArmHealthResult(
+                        arm.id, arm.name, "INSTALLED_ONLY",
+                        f"'{shell_check}' answered, so the binary is installed — but nothing here "
+                        f"proves this arm can act on the target. Declare a capability_check to "
+                        f"settle it.",
+                        {"stdout": res.stdout[:200]},
+                    )
 
                 return ArmHealthResult(
                     arm.id, arm.name, "READY", summary, {"stdout": res.stdout[:200], "serving": serving}
@@ -875,6 +949,8 @@ def shared_probe_binaries(config: CocktailConfig) -> dict[str, list[str]]:
     is a property of the set.
     """
     claims: dict[str, list[str]] = {}
+    groups: dict[str, set[str | None]] = {}
+
     for arm in config.arms:
         if arm.probe != "auto":
             continue
@@ -884,8 +960,18 @@ def shared_probe_binaries(config: CocktailConfig) -> dict[str, list[str]]:
         binary = resolve_probe_binary(arm)
         if binary:
             claims.setdefault(binary, []).append(arm.id)
+            groups.setdefault(binary, set()).add(arm.binary_group)
 
-    return {binary: ids for binary, ids in claims.items() if len(ids) > 1}
+    # Sharing a binary is only a collision between *different products*. The
+    # official CLI and the official MCP are one install reached two ways, and
+    # warning that "at most one of these is really installed" about them was
+    # simply false -- reported from the field as a wrong claim, which costs
+    # more trust than the real collision it was built to catch.
+    return {
+        binary: ids
+        for binary, ids in claims.items()
+        if len(ids) > 1 and not (len(groups[binary]) == 1 and None not in groups[binary])
+    }
 
 
 def run_doctor(config: CocktailConfig) -> list[ArmHealthResult]:
@@ -893,6 +979,12 @@ def run_doctor(config: CocktailConfig) -> list[ArmHealthResult]:
 
 
 READY_STATUSES = ("READY", "ASSUMED_READY")
+
+# Statuses asserting the binary answered something. A collision is about which
+# program owns a name on PATH, so it is just as real between three arms that
+# each got INSTALLED_ONLY as between three that got READY -- demoting them out
+# of the headline must not also silence the warning about them.
+RESPONDING_STATUSES = READY_STATUSES + ("INSTALLED_ONLY",)
 
 
 def evaluate_requirements(
@@ -941,6 +1033,7 @@ def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) 
         "READY": "[READY]",
         "ASSUMED_READY": "[ASSUMED_READY]",
         "NOT_RUNNING": "[NOT_RUNNING]",
+        "INSTALLED_ONLY": "[INSTALLED?]",
         "SOCKET_BOUND_ONLY": "[BOUND_ONLY (P4)]",
         "BOUND_ELSEWHERE": "[WRONG_PROJECT (P4)]",
         "UNCONFIGURED": "[UNCONFIGURED]",
@@ -965,21 +1058,39 @@ def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) 
 
     ready_count = sum(tally[s] for s in READY_STATUSES)
 
+    # The headline must not count arms the report is about to disown. Three
+    # arms answering the same `unity-cli --version` produced three READYs and
+    # a warning saying at most one of them is real -- the number and the prose
+    # contradicting each other in the same screen. At most one member of a
+    # collision group can be the installed program, so the group contributes
+    # one, and the difference is stated rather than quietly absorbed.
+    ready_ids = {r.arm_id for r in results if r.status in READY_STATUSES}
+    responding_ids = {r.arm_id for r in results if r.status in RESPONDING_STATUSES}
+    collisions = shared_probe_binaries(config)
+    unverifiable = 0
+    for arm_ids in collisions.values():
+        colliding_ready = [a for a in arm_ids if a in ready_ids]
+        if len(colliding_ready) > 1:
+            unverifiable += len(colliding_ready) - 1
+
+    confirmed_count = ready_count - unverifiable
+
     # Break the rest out by status: "0/11 READY" alone cannot tell an operator
     # whether to start a backend or install a tool.
     breakdown = ", ".join(
         f"{count} {status}" for status, count in tally.most_common() if status not in READY_STATUSES
     )
-    summary = f"\nDoctor Summary: {ready_count}/{len(results)} arms READY"
+    summary = f"\nDoctor Summary: {confirmed_count}/{len(results)} arms READY"
+    if unverifiable:
+        summary += f", +{unverifiable} indistinguishable"
     print(f"{summary} ({breakdown})." if breakdown else f"{summary}.")
 
     # A collision is invisible per-arm: each row is individually correct and
-    # the set is a lie. Report it next to the count it inflates.
-    ready_ids = {r.arm_id for r in results if r.status in READY_STATUSES}
-    for binary, arm_ids in sorted(shared_probe_binaries(config).items()):
-        colliding = [a for a in arm_ids if a in ready_ids]
+    # the set is a lie. Report it next to the count it no longer inflates.
+    for binary, arm_ids in sorted(collisions.items()):
+        colliding = [a for a in arm_ids if a in responding_ids]
         if len(colliding) > 1:
-            print(f"\n[P4 Warning] {len(colliding)} arms all report READY on the same binary "
+            print(f"\n[P4 Warning] {len(colliding)} arms all answered on the same binary "
                   f"'{binary}': {', '.join(colliding)}.")
             print("Only one program can own that name on PATH, so at most one of these arms is")
             print("really installed -- the others are reporting on someone else's executable.")

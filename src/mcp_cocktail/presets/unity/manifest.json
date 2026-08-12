@@ -22,7 +22,8 @@
         "tools": {
           "unity": ">=1.0"
         }
-      }
+      },
+      "binary_group": "unity-official"
     },
     {
       "id": "official-unity-mcp",
@@ -41,7 +42,8 @@
         "tools": {
           "unity": ">=1.0"
         }
-      }
+      },
+      "binary_group": "unity-official"
     },
     {
       "id": "coplay-mcp",
@@ -69,7 +71,6 @@
       "install": {
         "method": "openupm",
         "command": "openupm add com.ivanmurzak.unity.mcp",
-        "package_url": "https://github.com/IvanMurzak/Unity-MCP.git?path=/Unity-MCP-Plugin/Assets/root",
         "docs_url": "https://github.com/IvanMurzak/Unity-MCP/wiki/Installation-Guide",
         "requires_editor": true,
         "client_config": {
@@ -80,20 +81,12 @@
             }
           }
         },
-        "note": "The Unity plugin downloads and manages the server binary itself, so there is no separate server install. The port is derived per project (20000-29999) and can be pinned with MCP_PLUGIN_PORT. The documented client key is 'ai-game-developer'.",
+        "note": "Install via OpenUPM. A git-URL route was previously recorded here with the subpath /Unity-MCP-Plugin/Assets/root -- that path does not exist in the repository, and Unity answers a bad UPM git URL with a blocking Retry/Continue/Quit modal, so it is removed rather than corrected on a guess. The Unity plugin downloads and manages the server binary itself, so there is no separate server install. The port is derived per project (20000-29999) and can be pinned with MCP_PLUGIN_PORT. The documented client key is 'ai-game-developer'.",
         "steps": [
           {
             "actor": "shell",
             "text": "Add the plugin via OpenUPM.",
             "run": "openupm add com.ivanmurzak.unity.mcp"
-          },
-          {
-            "actor": "edit-json",
-            "file": "Packages/manifest.json",
-            "text": "Or add it directly as a git dependency instead of using OpenUPM.",
-            "dependency": {
-              "com.ivanmurzak.unity.mcp": "https://github.com/IvanMurzak/Unity-MCP.git?path=/Unity-MCP-Plugin/Assets/root"
-            }
           },
           {
             "actor": "human-gui",

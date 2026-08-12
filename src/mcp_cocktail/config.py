@@ -58,6 +58,16 @@ class ArmConfig:
     # check, which asks whether it is running. Prose in a note cannot be
     # checked by code; this can.
     requires: dict[str, Any] = field(default_factory=dict)
+    # Arms that deliberately share one binary because they ARE one product
+    # reached two ways. Without this the collision detector cannot tell
+    # "three rival CLIs fighting over `unity-cli`" from "the official CLI and
+    # the official MCP, which are the same install by design".
+    binary_group: str | None = None
+    # A command that proves the arm can do real work, not merely that its
+    # binary exists. `--version` answering is evidence of installation and
+    # nothing else; the field report found arms READY on a version flag whose
+    # first real call failed because the editor-side half was missing.
+    capability_check: str | None = None
     health_check: str | None = None
     # Dotted path into the health check's JSON stdout naming the project each
     # live instance is serving, e.g. "data.instances[].project". Lets doctor
@@ -70,7 +80,7 @@ class ArmConfig:
         known = {
             "id", "name", "type", "command", "mcp_server",
             "tool_prefix", "description", "capabilities", "env",
-            "setup_script", "install_hint", "install", "probe", "probe_reason", "discovery", "requires",
+            "setup_script", "install_hint", "install", "probe", "probe_reason", "discovery", "requires", "binary_group", "capability_check",
             "health_check", "binding_path"
         }
         extra = {k: v for k, v in data.items() if k not in known}
@@ -95,6 +105,8 @@ class ArmConfig:
             probe_reason=data.get("probe_reason", ""),
             discovery=data.get("discovery") or {},
             requires=data.get("requires") or {},
+            binary_group=data.get("binary_group"),
+            capability_check=data.get("capability_check"),
             health_check=data.get("health_check"),
             binding_path=data.get("binding_path"),
             extra=extra,
