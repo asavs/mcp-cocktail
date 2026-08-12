@@ -920,7 +920,12 @@ def evaluate_requirements(
 def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) -> None:
     ensure_utf8_streams()
 
-    print(f"\n=== mcp-cocktail Doctor: Arm Health & Diagnostics ===")
+    # Stamp the build into the report. A tester pasting output should not have
+    # to be asked which version produced it, and "are you on the latest?" is
+    # unanswerable without it.
+    from mcp_cocktail import __version__
+
+    print(f"\n=== mcp-cocktail {__version__} Doctor: Arm Health & Diagnostics ===")
     print(f"Domain: {config.name} ({len(results)} arms defined)\n")
 
     # "0/0 arms READY" reads as a pass. Nothing was checked because nothing is
