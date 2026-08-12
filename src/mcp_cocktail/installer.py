@@ -121,7 +121,15 @@ def get_harness_settings_path(
     elif h_clean == "mcp":
         if global_settings:
             return Path(os.environ.get("APPDATA", os.path.expanduser("~"))) / "Claude" / "claude_desktop_config.json"
-        return Path.cwd() / "mcp.json"
+        # Project-scoped MCP config is `.mcp.json`, with the leading dot. Writing
+        # `mcp.json` produced a correctly shaped file that no harness reads, and
+        # then reported success -- a server "installed" into a file nobody opens,
+        # which is the same green light this tool exists to catch. An existing
+        # legacy file still wins, so setups already pointing at it are not
+        # stranded by the correction.
+        legacy = Path.cwd() / "mcp.json"
+        canonical = Path.cwd() / ".mcp.json"
+        return legacy if (legacy.exists() and not canonical.exists()) else canonical
     else:  # claude / default
         if global_settings:
             return Path(os.path.expanduser("~/.claude/settings.json"))

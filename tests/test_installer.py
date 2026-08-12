@@ -358,3 +358,31 @@ def test_explicit_settings_path_still_overrides_the_codex_refusal(tmp_path: Path
 
     assert ok is True
     assert target.exists()
+
+
+def test_mcp_server_lands_in_the_file_the_harness_actually_reads(tmp_path: Path, monkeypatch):
+    """Project-scoped MCP config is `.mcp.json`, with the leading dot.
+
+    Writing `mcp.json` produced a correctly shaped file that no harness reads,
+    and reported "Installed mcp-cocktail stdio MCP server in ...". A server
+    installed into a file nobody opens is the exact green light this tool
+    exists to catch, and it silently costs the model its reporting channel.
+    """
+    monkeypatch.chdir(tmp_path)
+    ok, msg = install_hook(harness="mcp")
+
+    assert ok
+    assert (tmp_path / ".mcp.json").exists(), "wrote to a filename no harness reads"
+    assert not (tmp_path / "mcp.json").exists()
+    assert "mcp-cocktail" in load_json_file(tmp_path / ".mcp.json")["mcpServers"]
+
+
+def test_an_existing_legacy_mcp_json_is_not_stranded(tmp_path: Path, monkeypatch):
+    """Correcting the filename must not orphan a workspace already using it."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "mcp.json").write_text('{"mcpServers": {}}', encoding="utf-8")
+
+    install_hook(harness="mcp")
+
+    assert "mcp-cocktail" in load_json_file(tmp_path / "mcp.json")["mcpServers"]
+    assert not (tmp_path / ".mcp.json").exists()
