@@ -12,6 +12,7 @@ from pathlib import Path
 from mcp_cocktail.config import CocktailConfig, ArmConfig
 from mcp_cocktail.doctor import (
     MAX_REPORTED_FIELDS,
+    LIVENESS_PATH,
     NO_ROUTE_MARKER,
     READY_STATUSES,
     ArmHealthResult,
@@ -411,6 +412,80 @@ def test_ws_url_is_never_mistaken_for_a_shell_command():
 
     config = CocktailConfig(name="x", description="", arms=[arm])
     assert shared_probe_binaries(config) == {}
+
+
+def _status_file(root: Path, name: str, port: int, project: str, age_s: float = 0.0, **extra):
+    from datetime import datetime, timedelta, timezone
+    stamp = (datetime.now(timezone.utc) - timedelta(seconds=age_s)).isoformat()
+    payload = {"ws_port": port, "project_path": project, "last_heartbeat": stamp, "pid": 1234, **extra}
+    (root / name).write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _discovering_arm(root: Path) -> ArmConfig:
+    return ArmConfig(
+        id="realvirtual-mcp", name="RealVirtual", type="mcp",
+        health_check="ws://127.0.0.1:18711", probe="websocket",
+        discovery={"status_glob": str(root / "unity-mcp-status-*.json"), "max_age_seconds": 30},
+    )
+
+
+def test_discovery_probes_the_port_the_editor_actually_took(tmp_path: Path):
+    """The port walks 18711-18721 when busy, so a second Editor lands one
+    along. A fixed probe reports dead for a project that is running fine."""
+    with ws_listener("answer") as port:
+        _status_file(tmp_path, "unity-mcp-status-aaa.json", port, str(tmp_path))
+        res = probe_mcp_arm(_discovering_arm(tmp_path), workspace_root=tmp_path)
+
+    assert res.status == "READY", res.message
+    assert str(port) in res.message, "must report the discovered port, not the manifest's guess"
+
+
+def test_discovery_flags_an_editor_serving_another_project(tmp_path: Path):
+    """The status directory is ecosystem-wide, so a file found there is not
+    automatically this workspace's. Bound is not bound-to-your-thing."""
+    _status_file(tmp_path, "unity-mcp-status-bbb.json", 18712, r"C:\work\some-other-project")
+    res = probe_mcp_arm(_discovering_arm(tmp_path), workspace_root=tmp_path)
+
+    assert res.status == "BOUND_ELSEWHERE"
+    assert "some-other-project" in res.message
+
+
+def test_stale_status_files_are_ignored(tmp_path: Path):
+    """The writer refreshes every few seconds; a stale file is a crashed
+    Editor, not a live one."""
+    _status_file(tmp_path, "unity-mcp-status-ccc.json", 18711, str(tmp_path), age_s=120)
+    res = probe_mcp_arm(_discovering_arm(tmp_path), workspace_root=tmp_path)
+
+    assert res.status == "NOT_RUNNING"
+    assert "No Editor is publishing a status file" in res.message
+
+
+def test_domain_reload_is_not_reported_as_a_failure(tmp_path: Path):
+    """A reload takes the socket down for seconds by design. Calling that
+    broken teaches the operator to ignore the row."""
+    _status_file(tmp_path, "unity-mcp-status-ddd.json", 18711, str(tmp_path), reloading=True)
+    res = probe_mcp_arm(_discovering_arm(tmp_path), workspace_root=tmp_path)
+
+    assert res.status == "ASSUMED_READY"
+    assert "domain-reload" in res.message
+
+
+def test_unreadable_status_file_does_not_crash_the_probe(tmp_path: Path):
+    (tmp_path / "unity-mcp-status-eee.json").write_text("{half-written", encoding="utf-8")
+    res = probe_mcp_arm(_discovering_arm(tmp_path), workspace_root=tmp_path)
+
+    assert res.status == "NOT_RUNNING"
+
+
+def test_realvirtual_arm_uses_the_verified_probe():
+    config = CocktailConfig.load(PRESETS_DIR / "unity" / "manifest.json")
+    arm = next(a for a in config.arms if a.id == "realvirtual-mcp")
+
+    assert arm.probe == "websocket"
+    assert arm.discovery.get("status_glob")
+    # Probing /mcp registers a real session and bumps the Editor's connected
+    # client count; the liveness path must stay distinct from it.
+    assert LIVENESS_PATH != "/mcp"
 
 
 def test_codergamester_arm_is_wired_up():

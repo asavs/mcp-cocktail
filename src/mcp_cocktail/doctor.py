@@ -6,6 +6,7 @@ MCP protocol, verifying initialize responses and available tool counts honestly.
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import re
@@ -18,6 +19,7 @@ import urllib.parse
 import urllib.request
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -458,10 +460,117 @@ def probe_websocket_listener(host: str, port: int, timeout: float = 2.0) -> tupl
         return "OFFLINE", f"connection failed ({e})"
 
 
-def probe_websocket_arm(arm: ArmConfig, url: str) -> ArmHealthResult:
+STATUS_FIELD_PORT = "ws_port"
+STATUS_FIELD_PROJECT = "project_path"
+STATUS_FIELD_HEARTBEAT = "last_heartbeat"
+STATUS_FIELD_RELOADING = "reloading"
+
+
+def read_status_files(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """Live Editor instances advertised by on-disk status files.
+
+    Editors that move their port publish where they landed. Reading that is
+    the difference between checking the arm and checking a port number the
+    manifest happened to guess -- with two Editors open, the second lands on
+    the next free port and a fixed probe reports healthy for the wrong
+    project, or dead for a project that is running fine.
+
+    Files are filtered on heartbeat age, matching what the vendor's own client
+    does: the writer refreshes every few seconds, so a stale file is a crashed
+    Editor rather than a live one.
+    """
+    pattern = os.path.expanduser(str(spec.get("status_glob", "")))
+    if not pattern:
+        return []
+
+    max_age = float(spec.get("max_age_seconds", 30))
+    now = datetime.now(timezone.utc)
+    live: list[dict[str, Any]] = []
+
+    for path in sorted(glob.glob(pattern)):
+        try:
+            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception:
+            continue  # a half-written or foreign file is not an error
+
+        if not isinstance(payload, dict) or not payload.get(STATUS_FIELD_PORT):
+            continue
+
+        stamp = payload.get(STATUS_FIELD_HEARTBEAT)
+        if isinstance(stamp, str):
+            try:
+                beat = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+                if beat.tzinfo is None:
+                    beat = beat.replace(tzinfo=timezone.utc)
+                if (now - beat).total_seconds() > max_age:
+                    continue
+            except ValueError:
+                pass  # unparseable stamp: keep it, the probe still decides
+
+        live.append(payload)
+
+    return live
+
+
+def resolve_discovered_target(
+    arm: ArmConfig, workspace_root: Path | None
+) -> tuple[dict[str, Any] | None, ArmHealthResult | None]:
+    """Pick the advertised instance serving this workspace.
+
+    Returns (instance, early_result). The directory is shared ecosystem-wide,
+    so a file found there is not automatically this workspace's -- an instance
+    serving another project is BOUND_ELSEWHERE, the same claim the CLI arms
+    already make, reached by a different route.
+    """
+    instances = read_status_files(arm.discovery)
+    if not instances:
+        return None, ArmHealthResult(
+            arm.id, arm.name, "NOT_RUNNING",
+            "No Editor is publishing a status file, so nothing is serving this arm.",
+            {"discovery": arm.discovery.get("status_glob", "")},
+        )
+
+    if workspace_root:
+        for inst in instances:
+            served = inst.get(STATUS_FIELD_PROJECT)
+            if isinstance(served, str) and _same_location(served, str(workspace_root)):
+                return inst, None
+
+        detail = "; ".join(
+            str(i.get(STATUS_FIELD_PROJECT)) for i in instances if i.get(STATUS_FIELD_PROJECT)
+        )
+        return None, ArmHealthResult(
+            arm.id, arm.name, "BOUND_ELSEWHERE",
+            f"P4 Warning: live but serving {detail} — not this workspace ({workspace_root}).",
+            {"bound_to": detail, "workspace_root": str(workspace_root)},
+        )
+
+    return instances[0], None
+
+
+def probe_websocket_arm(arm: ArmConfig, url: str, workspace_root: Path | None = None) -> ArmHealthResult:
     parsed = urllib.parse.urlparse(url)
     host = parsed.hostname or "127.0.0.1"
     port = parsed.port
+    serving = ""
+
+    if arm.discovery:
+        instance, early = resolve_discovered_target(arm, workspace_root)
+        if early:
+            return early
+        if instance:
+            port = int(instance[STATUS_FIELD_PORT])
+            serving = f" serving {instance.get(STATUS_FIELD_PROJECT, '')}".rstrip()
+
+            # A domain reload takes the socket down for a few seconds by
+            # design. Reporting that as a failure would train the operator to
+            # ignore this row.
+            if instance.get(STATUS_FIELD_RELOADING):
+                return ArmHealthResult(
+                    arm.id, arm.name, "ASSUMED_READY",
+                    f"{host}:{port} is mid domain-reload; the socket is legitimately down briefly.",
+                    {"host": host, "port": port, "reloading": True},
+                )
 
     if not port:
         return ArmHealthResult(
@@ -470,6 +579,7 @@ def probe_websocket_arm(arm: ArmConfig, url: str) -> ArmHealthResult:
         )
 
     status, detail = probe_websocket_listener(host, port)
+    detail = f"{detail}{serving}"
     prefix = "P4 Warning: " if status == "SOCKET_BOUND_ONLY" else ""
 
     return ArmHealthResult(
@@ -564,7 +674,7 @@ def probe_mcp_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHeal
     #    Unity arms host the session inside the Editor over WebSocket, so
     #    without this branch their only honest setting was "cannot be checked".
     if hc.startswith(("ws://", "wss://")):
-        return probe_websocket_arm(arm, hc)
+        return probe_websocket_arm(arm, hc, workspace_root)
 
     # 1. If health_check is an HTTP URL, probe HTTP
     if hc.startswith("http://") or hc.startswith("https://"):

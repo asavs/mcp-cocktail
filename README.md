@@ -117,6 +117,21 @@ were never meant to have is distinguishable from something that broke. `doctor` 
 two arms report READY on the same binary — three separate Unity CLI projects all install an
 executable named `unity-cli`, and only one of them can own that name on PATH.
 
+### 2a. Check Prerequisites (`mcp-cocktail preflight`)
+
+```bash
+mcp-cocktail preflight
+```
+
+`doctor` answers *is this arm running*. `preflight` answers *could I even have it* — a different
+question with a different fix. An arm needing Node 24 on a Node 22 machine reports `OFFLINE`
+exactly like an arm nobody has installed yet, so eleven identical red rows hide the handful that
+are one command away from working. Requirements are declared in the manifest (`requires`), checked
+against detected tool versions and the workspace's `ProjectSettings/ProjectVersion.txt`.
+
+Arms with no declared requirements are listed separately and explicitly: preflight cannot vouch
+for them, which means nobody recorded what they need — not that they need nothing.
+
 ### 2b. Obtain the Missing Arms (`mcp-cocktail install`)
 
 ```bash
@@ -128,6 +143,17 @@ Prints the documented install command, the editor-side package URL, the harness 
 snippet, and the gotchas — for each arm, sourced from that project's own docs. It **prints steps
 and never runs them**: these install third-party software, and several need choices only you can
 make (which Unity project, which port).
+
+Every step is tagged with who can perform it, because the boundary is not where it looks:
+
+| Tag | Meaning |
+|---|---|
+| `[agent: shell]` | a command an agent can run |
+| `[agent: edit file]` | a file an agent can edit — adding a UPM package looks like a GUI action, but `Packages/manifest.json` is plain JSON |
+| `[you: in the Editor]` | genuinely not automatable, e.g. realvirtual's "Download Python Server" button |
+
+Across the Unity preset that is **17 of 23 steps an agent can perform**. `--json` emits the whole
+plan as structured data so an agent acts on it rather than parsing prose.
 
 `doctor` reports and exits 0; a manifest is a survey of competing arms, so it does not
 fail merely because some arm is down. To assert on the arms you actually depend on:

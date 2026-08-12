@@ -50,6 +50,14 @@ class ArmConfig:
     # than "we cannot substantiate this".
     probe: str = "auto"
     probe_reason: str = ""
+    # How to find the arm's live endpoint when it does not sit on a fixed port.
+    # {"status_glob": "~/.unity-mcp/unity-mcp-status-*.json", "max_age_seconds": 30}
+    discovery: dict[str, Any] = field(default_factory=dict)
+    # What must already be present for this arm to be installable at all:
+    # {"tools": {"node": ">=22"}, "unity": ">=2022.3"}. Distinct from a health
+    # check, which asks whether it is running. Prose in a note cannot be
+    # checked by code; this can.
+    requires: dict[str, Any] = field(default_factory=dict)
     health_check: str | None = None
     # Dotted path into the health check's JSON stdout naming the project each
     # live instance is serving, e.g. "data.instances[].project". Lets doctor
@@ -62,7 +70,7 @@ class ArmConfig:
         known = {
             "id", "name", "type", "command", "mcp_server",
             "tool_prefix", "description", "capabilities", "env",
-            "setup_script", "install_hint", "install", "probe", "probe_reason",
+            "setup_script", "install_hint", "install", "probe", "probe_reason", "discovery", "requires",
             "health_check", "binding_path"
         }
         extra = {k: v for k, v in data.items() if k not in known}
@@ -85,6 +93,8 @@ class ArmConfig:
             install=data.get("install") or {},
             probe=data.get("probe", "auto"),
             probe_reason=data.get("probe_reason", ""),
+            discovery=data.get("discovery") or {},
+            requires=data.get("requires") or {},
             health_check=data.get("health_check"),
             binding_path=data.get("binding_path"),
             extra=extra,

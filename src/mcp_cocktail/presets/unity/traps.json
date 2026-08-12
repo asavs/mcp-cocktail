@@ -68,8 +68,8 @@
     },
     {
       "id": "unity-mcp-no-editor-precondition",
-      "message": "P1 — Check `unity status --json` before the first `mcp__unity-editor-mcp__*` call. The tool catalogue is advertised whether or not an Editor is running, so its presence is NOT evidence one exists. With `count: 0` every call in this catalogue blocks the full 60s and returns 'Pipeline command timed out after 60000ms' without ever naming the missing precondition. The check costs ~200ms; the failure costs a minute per call. If no Editor is running, use the `unity` CLI instead.",
-      "tool_matcher": "^mcp__unity-editor-mcp__.*$",
+      "message": "P1 — Check `unity status --json` before the first Editor-bound MCP call. Every Unity MCP server in this manifest advertises its full tool catalogue whether or not an Editor is running, so the presence of these tools is NOT evidence one exists. With `count: 0` the call blocks the full timeout (60s on the official arm, ~20s on coplay) and returns a timeout or `no_unity_session` without ever naming the missing precondition. The check costs ~200ms; the failure costs up to a minute per call. If no Editor is running, use the `unity` CLI instead.",
+      "tool_matcher": "^mcp__(UnityMCP|ai-game-developer|mcp-unity|realvirtual-unity|unity|unity-editor-mcp)__.*$",
       "target_matcher": null,
       "cooldown_seconds": 3600,
       "read_only_ignore": false
@@ -89,6 +89,14 @@
       "target_matcher": null,
       "cooldown_seconds": 0,
       "read_only_ignore": true
+    },
+    {
+      "id": "mcp-two-piece-install",
+      "message": "P4 — Most Unity MCP arms are TWO pieces: a server process and an Editor-side package. Installing one gives you a server connected to nothing, which answers liveness checks while every real call fails. anklebreaker needs unity-mcp-plugin alongside the Node server; realvirtual needs the Python server downloaded from its Editor toolbar; codergamester's Node bridge does nothing until the Unity package has built it. Run `mcp-cocktail install <arm>` and complete every step, not just the shell one.",
+      "tool_matcher": "^mcp__(UnityMCP|ai-game-developer|mcp-unity|realvirtual-unity|unity|unity-editor-mcp)__.*$",
+      "target_matcher": null,
+      "cooldown_seconds": 86400,
+      "read_only_ignore": false
     }
   ]
 }

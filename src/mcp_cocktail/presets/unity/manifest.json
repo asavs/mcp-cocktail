@@ -17,7 +17,12 @@
       "capabilities": [
         "editor-automation",
         "cli"
-      ]
+      ],
+      "requires": {
+        "tools": {
+          "unity": ">=1.0"
+        }
+      }
     },
     {
       "id": "official-unity-mcp",
@@ -31,7 +36,12 @@
       "capabilities": [
         "editor-automation",
         "mcp"
-      ]
+      ],
+      "requires": {
+        "tools": {
+          "unity": ">=1.0"
+        }
+      }
     },
     {
       "id": "coplay-mcp",
@@ -70,12 +80,34 @@
             }
           }
         },
-        "note": "The Unity plugin downloads and manages the server binary itself, so there is no separate server install. The port is derived per project (20000-29999) and can be pinned with MCP_PLUGIN_PORT. The documented client key is 'ai-game-developer'."
+        "note": "The Unity plugin downloads and manages the server binary itself, so there is no separate server install. The port is derived per project (20000-29999) and can be pinned with MCP_PLUGIN_PORT. The documented client key is 'ai-game-developer'.",
+        "steps": [
+          {
+            "actor": "shell",
+            "text": "Add the plugin via OpenUPM.",
+            "run": "openupm add com.ivanmurzak.unity.mcp"
+          },
+          {
+            "actor": "edit-json",
+            "file": "Packages/manifest.json",
+            "text": "Or add it directly as a git dependency instead of using OpenUPM.",
+            "dependency": {
+              "com.ivanmurzak.unity.mcp": "https://github.com/IvanMurzak/Unity-MCP.git?path=/Unity-MCP-Plugin/Assets/root"
+            }
+          },
+          {
+            "actor": "human-gui",
+            "text": "Open the project. The plugin downloads and manages the server binary itself; note the port it reports, since it is derived per project (20000-29999)."
+          }
+        ]
       },
       "capabilities": [
         "editor-automation",
         "mcp"
-      ]
+      ],
+      "requires": {
+        "unity": ">=2022.3"
+      }
     },
     {
       "id": "anklebreaker-mcp",
@@ -92,9 +124,27 @@
         "docs_url": "https://github.com/AnkleBreaker-Studio/unity-mcp-server",
         "requires_editor": true,
         "steps": [
-          "Install the Node MCP server: npx anklebreaker-unity-mcp@latest",
-          "Add the Unity plugin via Package Manager git URL (below); it hosts the bridge on 7890",
-          "Register the server with your harness using the config below"
+          {
+            "actor": "shell",
+            "text": "Install the Node MCP server.",
+            "run": "npx anklebreaker-unity-mcp@latest"
+          },
+          {
+            "actor": "edit-json",
+            "file": "Packages/manifest.json",
+            "text": "Add the Unity plugin dependency (it hosts the bridge on 7890).",
+            "dependency": {
+              "com.anklebreaker.unity-mcp": "https://github.com/AnkleBreaker-Studio/unity-mcp-plugin.git"
+            }
+          },
+          {
+            "actor": "human-gui",
+            "text": "Reopen the Unity project so the plugin loads and binds 7890."
+          },
+          {
+            "actor": "edit-json",
+            "text": "Register the server with your harness using client_config below."
+          }
         ],
         "client_config": {
           "mcpServers": {
@@ -116,7 +166,12 @@
       "capabilities": [
         "editor-automation",
         "mcp"
-      ]
+      ],
+      "requires": {
+        "tools": {
+          "node": ">=18"
+        }
+      }
     },
     {
       "id": "realvirtual-mcp",
@@ -124,8 +179,7 @@
       "type": "mcp",
       "mcp_server": "realvirtual-unity",
       "tool_prefix": "mcp__realvirtual-unity__",
-      "probe": "none",
-      "probe_reason": "It serves WebSocket on 18711 (auto-incrementing when busy), not HTTP, so an HTTP probe reports a false negative even when it is healthy.",
+      "probe": "websocket",
       "install_hint": "Unity Package Manager git URL https://github.com/game4automation/io.realvirtual.mcp.git",
       "install": {
         "method": "upm-git",
@@ -133,17 +187,34 @@
         "docs_url": "https://doc.realvirtual.io/extensions/mcp-server/installation-setup",
         "requires_editor": true,
         "steps": [
-          "Add the UPM package via the git URL below (needs Unity 6000.0+, Newtonsoft JSON, Unity Recorder)",
-          "In Unity, press the realvirtual toolbar 'Download Python Server' button - it clones the Python server into Assets/StreamingAssets/realvirtual-MCP/ with an embedded Python 3.12",
-          "That same button writes the client config for you"
+          {
+            "actor": "edit-json",
+            "file": "Packages/manifest.json",
+            "text": "Add the UPM package (needs Unity 6000.0+, Newtonsoft JSON, Unity Recorder).",
+            "dependency": {
+              "io.realvirtual.mcp": "https://github.com/game4automation/io.realvirtual.mcp.git"
+            }
+          },
+          {
+            "actor": "human-gui",
+            "text": "Unity: realvirtual toolbar > 'Download Python Server'. This clones the Python server into Assets/StreamingAssets/realvirtual-MCP/ with an embedded Python 3.12, and writes the client config for you. There is no scriptable equivalent."
+          }
         ],
-        "note": "The Python server is NOT pip- or uvx-installable; the in-Editor button is the only documented route. The client key differs between sources - the repo README says 'UnityMCP', which collides with coplay-mcp, so the docs site's 'realvirtual-unity' is used here."
+        "note": "The Python server is NOT pip- or uvx-installable; the in-Editor 'Download Python Server' button is the only documented route. The Editor hosts a websocket-sharp server on /mcp, bound to 127.0.0.1 only. The port walks 18711-18721 when busy (a second Editor takes the next one), so the port is discovered from ~/.unity-mcp/unity-mcp-status-*.json rather than assumed -- that file also names the project each instance serves. Never probe /mcp itself: it registers a real session and increments the Connected Clients count in the Editor UI."
       },
       "capabilities": [
         "editor-automation",
         "mcp",
         "digital-twin"
-      ]
+      ],
+      "health_check": "ws://127.0.0.1:18711",
+      "discovery": {
+        "status_glob": "~/.unity-mcp/unity-mcp-status-*.json",
+        "max_age_seconds": 30
+      },
+      "requires": {
+        "unity": ">=6000.0"
+      }
     },
     {
       "id": "akiojin-cli",
@@ -158,9 +229,21 @@
         "docs_url": "https://github.com/akiojin/unity-cli",
         "requires_editor": true,
         "steps": [
-          "Install the CLI (command below)",
-          "Add the Unity bridge package: openupm add com.akiojin.unity-cli-bridge",
-          "Verify with: unity-cli system ping"
+          {
+            "actor": "shell",
+            "text": "Install the CLI. On Windows this script fails \u2014 use the unity-cli-win-x64 release asset or cargo instead.",
+            "run": "curl -fsSL https://raw.githubusercontent.com/akiojin/unity-cli/main/scripts/install.sh | sh"
+          },
+          {
+            "actor": "shell",
+            "text": "Add the Unity bridge package.",
+            "run": "openupm add com.akiojin.unity-cli-bridge"
+          },
+          {
+            "actor": "shell",
+            "text": "Verify against a running Editor.",
+            "run": "unity-cli system ping"
+          }
         ],
         "note": "Installs an executable named 'unity-cli' - the same name akiojin-cli, youngwoo-cli and rage-cli all use. Only one of them can own that name on PATH. On Windows the install script fails outright: detect_rid() handles only Darwin and Linux and dies on Git Bash, despite a unity-cli-win-x64 release asset existing. Use that asset directly, or `cargo install --path .` from a clone. Connects to the Editor over TCP on port 6400."
       },
@@ -183,16 +266,31 @@
         "docs_url": "https://github.com/youngwoocho02/unity-cli",
         "requires_editor": true,
         "steps": [
-          "Install the CLI (command below), or cross-platform: go install github.com/youngwoocho02/unity-cli@latest",
-          "On Windows: irm https://raw.githubusercontent.com/youngwoocho02/unity-cli/master/install.ps1 | iex",
-          "Add the Unity Connector package via the git URL below; it starts when Unity opens"
+          {
+            "actor": "shell",
+            "text": "Install the CLI (cross-platform route).",
+            "run": "go install github.com/youngwoocho02/unity-cli@latest"
+          },
+          {
+            "actor": "edit-json",
+            "file": "Packages/manifest.json",
+            "text": "Add the Unity Connector package; it starts when Unity opens.",
+            "dependency": {
+              "com.youngwoocho02.unity-cli-connector": "https://github.com/youngwoocho02/unity-cli.git?path=unity-connector"
+            }
+          }
         ],
         "note": "Installs an executable named 'unity-cli' - the same name akiojin-cli, youngwoo-cli and rage-cli all use. Only one of them can own that name on PATH. The CLI checks its version against the Connector's and refuses on mismatch; bypass with --ignore-version-mismatch. The install URLs point at the 'master' branch while the repo default is 'main' - both resolve today."
       },
       "capabilities": [
         "editor-automation",
         "cli"
-      ]
+      ],
+      "requires": {
+        "tools": {
+          "go": ">=1.21"
+        }
+      }
     },
     {
       "id": "hatayama-loop",
@@ -208,15 +306,37 @@
         "docs_url": "https://github.com/hatayama/unity-cli-loop",
         "requires_editor": true,
         "steps": [
-          "npm install -g uloop-cli   (requires Node >= 22)",
-          "Add the Unity package via the git URL below, or the OpenUPM scope io.github.hatayama.uloopmcp"
+          {
+            "actor": "shell",
+            "text": "Install the CLI (requires Node >= 22).",
+            "run": "npm install -g uloop-cli"
+          },
+          {
+            "actor": "edit-json",
+            "file": "Packages/manifest.json",
+            "text": "Add the Unity package (OpenUPM scope io.github.hatayama.uloopmcp also works).",
+            "dependency": {
+              "io.github.hatayama.uloopmcp": "https://github.com/hatayama/unity-cli-loop.git?path=/Packages/src"
+            }
+          },
+          {
+            "actor": "shell",
+            "text": "Verify the binary is on PATH.",
+            "run": "uloop --version"
+          }
         ],
         "note": "Three different strings to keep straight: package 'uloop-cli', binary 'uloop', repo 'unity-cli-loop'. It was renamed from uLoopMCP at v1.0.0, so the OpenUPM scope and the npm homepage still carry the old name."
       },
       "capabilities": [
         "editor-automation",
         "cli"
-      ]
+      ],
+      "requires": {
+        "tools": {
+          "node": ">=22",
+          "npm": ">=9"
+        }
+      }
     },
     {
       "id": "rage-cli",
@@ -230,13 +350,26 @@
         "command": "npm install -g @rage-against-the-pixel/unity-cli",
         "docs_url": "https://github.com/RageAgainstThePixel/unity-cli",
         "requires_editor": false,
-        "note": "Installs an executable named 'unity-cli' - the same name akiojin-cli, youngwoo-cli and rage-cli all use. Only one of them can own that name on PATH. Different in kind from the other CLI arms: this is a Unity Hub/Editor/licence installer and runner for CI, not an Editor-automation bridge, so it needs no Unity package and no running Editor. package.json requires Node >= 24 (the README's 'v22.12+' is stale)."
+        "note": "Installs an executable named 'unity-cli' - the same name akiojin-cli, youngwoo-cli and rage-cli all use. Only one of them can own that name on PATH. Different in kind from the other CLI arms: this is a Unity Hub/Editor/licence installer and runner for CI, not an Editor-automation bridge, so it needs no Unity package and no running Editor. package.json requires Node >= 24 (the README's 'v22.12+' is stale).",
+        "steps": [
+          {
+            "actor": "shell",
+            "text": "Install the CLI (requires Node >= 24).",
+            "run": "npm install -g @rage-against-the-pixel/unity-cli"
+          }
+        ]
       },
       "capabilities": [
         "project-lifecycle",
         "cli",
         "ci"
-      ]
+      ],
+      "requires": {
+        "tools": {
+          "node": ">=24",
+          "npm": ">=9"
+        }
+      }
     },
     {
       "id": "codergamester-mcp",
@@ -258,11 +391,31 @@
         "docs_url": "https://github.com/CoderGamester/mcp-unity",
         "requires_editor": true,
         "steps": [
-          "Install Node.js 18+ (npm 9+ to build).",
-          "Unity: Window > Package Manager > '+' > 'Add package from git URL...' > the URL below.",
-          "Let the import finish. On Editor load the package runs npm install + npm run build in <package>/Server~ to produce Server~/build/index.js. If it is missing, use Tools > MCP Unity > Server Window > 'Force Install Server'.",
-          "Configure the client with Tools > MCP Unity > Server Window > 'Configure <client>' -- it writes the absolute path and the settings env var for you.",
-          "Tools > MCP Unity > Server Window > 'Start Server' (AutoStartServer defaults to true)."
+          {
+            "actor": "shell",
+            "text": "Confirm Node 18+ is present.",
+            "run": "node --version"
+          },
+          {
+            "actor": "edit-json",
+            "file": "Packages/manifest.json",
+            "text": "Add the UPM package.",
+            "dependency": {
+              "com.gamelovers.mcp-unity": "https://github.com/CoderGamester/mcp-unity.git"
+            }
+          },
+          {
+            "actor": "human-gui",
+            "text": "Open the project and let the import finish. On load the package runs npm install + npm run build in <package>/Server~. If Server~/build/index.js is missing, use Tools > MCP Unity > Server Window > 'Force Install Server'."
+          },
+          {
+            "actor": "human-gui",
+            "text": "Tools > MCP Unity > Server Window > 'Configure <client>' \u2014 it writes the absolute path and MCP_UNITY_SETTINGS_PATH for you."
+          },
+          {
+            "actor": "human-gui",
+            "text": "Tools > MCP Unity > Server Window > 'Start Server' (AutoStartServer defaults to true)."
+          }
         ],
         "client_config": {
           "mcpServers": {
@@ -279,6 +432,13 @@
         },
         "repair_command": "cd <package>/Server~ && npm install && npm run build",
         "note": "There is no one-line install: the Node bridge is not published for npx and is built by the Unity package at Editor load. Do NOT run `npx mcp-unity-server` -- that npm package is a stale 1.0.0 from April 2025 by the same author, four minor versions behind the 1.4.0 package, and it resolves, so it looks plausible and runs the wrong code. The trailing tilde in `Server~` is required (Unity ignores `~` folders). The package-cache path carries a version hash that changes on every update and silently breaks a hard-coded client config -- re-run the Configure button after updating. Port 8090 is overridable with UNITY_PORT; UNITY_HOST defaults to localhost. README says Unity 6+, package.json enforces 2022.3. Entering Play Mode triggers a domain reload that drops the bridge."
+      },
+      "requires": {
+        "tools": {
+          "node": ">=18",
+          "npm": ">=9"
+        },
+        "unity": ">=2022.3"
       }
     }
   ],

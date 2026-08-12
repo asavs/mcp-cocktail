@@ -258,3 +258,61 @@ def test_run_guardrail_emits_additional_context(tmp_path, monkeypatch, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
     assert "explicit path" in payload["hookSpecificOutput"]["additionalContext"]
+
+
+def _fires(tool_name: str, traps_path, session: str) -> bool:
+    """Run the real hook entrypoint and report whether the precondition fired."""
+    import io, json as _json, sys
+    from contextlib import redirect_stdout
+    from mcp_cocktail.guardrail import run_guardrail
+
+    payload = _json.dumps({"session_id": session, "tool_name": tool_name, "tool_input": {}})
+    buf = io.StringIO()
+    stdin = sys.stdin
+    sys.stdin = io.StringIO(payload)
+    try:
+        with redirect_stdout(buf):
+            run_guardrail(str(traps_path))
+    finally:
+        sys.stdin = stdin
+
+    return "unity status" in buf.getvalue()
+
+
+def test_no_editor_rule_covers_every_editor_bound_arm(tmp_path, monkeypatch):
+    # Cooldown state lives in TEMP keyed by session id and survives process
+    # exit by design, so without redirecting it a second pytest run inherits
+    # the first run's suppression and the test silently stops testing.
+    monkeypatch.setenv("TEMP", str(tmp_path))
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    """The rule guarded one prefix while the preset grew to six Editor-bound
+    MCP servers. Every one of them advertises a full tool catalogue with no
+    Editor running and then burns the full timeout per call, so a rule that
+    covers only the official arm leaves five arms unguarded."""
+    from mcp_cocktail.config import CocktailConfig
+    from mcp_cocktail.installer import PRESETS_DIR
+
+    traps = PRESETS_DIR / "unity" / "traps.json"
+    config = CocktailConfig.load(PRESETS_DIR / "unity" / "manifest.json")
+
+    editor_bound = [
+        a for a in config.arms
+        if a.type == "mcp" and "editor-automation" in a.capabilities and a.tool_prefix
+    ]
+    assert len(editor_bound) >= 5, "expected several Editor-bound MCP arms in the preset"
+
+    for i, arm in enumerate(editor_bound):
+        # A distinct session per call: the rule's hour-long cooldown is shared
+        # by id, so one state file would suppress every arm after the first.
+        assert _fires(f"{arm.tool_prefix}some_tool", traps, f"s{i}"), \
+            f"{arm.id} ({arm.tool_prefix}) is not covered by the no-Editor precondition rule"
+
+
+def test_no_editor_rule_does_not_fire_on_unrelated_tools(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEMP", str(tmp_path))
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    from mcp_cocktail.installer import PRESETS_DIR
+
+    traps = PRESETS_DIR / "unity" / "traps.json"
+    for i, tool in enumerate(("Bash", "Read", "mcp__github__create_issue")):
+        assert not _fires(tool, traps, f"neg{i}"), f"{tool} should not trip a Unity precondition"

@@ -18,6 +18,38 @@ from mcp_cocktail.config import ArmConfig, CocktailConfig
 
 INDENT = "    "
 
+# Who can actually perform a step. The distinction is not cosmetic: an agent
+# reading a plan needs to know where its reach ends, and the boundary is not
+# where it looks. Adding a Unity package reads like a GUI action but
+# Packages/manifest.json is plain JSON, so an agent can do it; pressing
+# "Download Python Server" in the Editor genuinely cannot be automated.
+# Without the tag an agent either refuses work it could do, or fabricates
+# progress on work it cannot.
+ACTOR_LABELS = {
+    "shell": "[agent: shell]",
+    "edit-json": "[agent: edit file]",
+    "human-gui": "[you: in the Editor]",
+    "human": "[you]",
+}
+AGENT_ACTORS = ("shell", "edit-json")
+
+
+def normalize_step(step: Any) -> dict[str, Any]:
+    """Accept either a plain string or a tagged object.
+
+    Older presets carry bare strings. An untagged step is reported as `human`
+    rather than assumed automatable -- guessing wrong in that direction has an
+    agent running commands nobody authorised.
+    """
+    if isinstance(step, str):
+        return {"actor": "human", "text": step}
+
+    if isinstance(step, dict):
+        actor = step.get("actor", "human")
+        return {**step, "actor": actor if actor in ACTOR_LABELS else "human"}
+
+    return {"actor": "human", "text": str(step)}
+
 
 def format_client_config(client_config: Any) -> list[str]:
     """Render the harness registration snippet an arm documents."""
@@ -50,8 +82,18 @@ def render_arm_plan(arm: ArmConfig) -> list[str]:
     if install.get("requires_editor"):
         lines.append(f"{INDENT}requires the Unity Editor to be running")
 
-    for i, step in enumerate(install.get("steps") or [], 1):
-        lines.append(f"{INDENT}{i}. {step}")
+    steps = [normalize_step(s) for s in (install.get("steps") or [])]
+    for i, step in enumerate(steps, 1):
+        label = ACTOR_LABELS.get(step["actor"], ACTOR_LABELS["human"])
+        lines.append(f"{INDENT}{i}. {label} {step.get('text', '')}".rstrip())
+        if step.get("run"):
+            lines.append(f"{INDENT}{INDENT}$ {step['run']}")
+        if step.get("file"):
+            lines.append(f"{INDENT}{INDENT}file: {step['file']}")
+
+    automatable = sum(1 for s in steps if s["actor"] in AGENT_ACTORS)
+    if steps:
+        lines.append(f"{INDENT}({automatable} of {len(steps)} steps can be run by an agent)")
 
     if install.get("command"):
         lines.append(f"{INDENT}install:")
@@ -83,6 +125,32 @@ def render_arm_plan(arm: ArmConfig) -> list[str]:
         lines.append(f"{INDENT}No install route is recorded for this arm.")
 
     return lines
+
+
+def install_plan_data(config: CocktailConfig, arm_ids: list[str] | None = None) -> dict[str, Any]:
+    """The plan as data, for an agent to act on rather than parse out of prose."""
+    by_id = {a.id: a for a in config.arms}
+    selected = [by_id[a] for a in arm_ids if a in by_id] if arm_ids else list(config.arms)
+
+    arms = []
+    for arm in selected:
+        steps = [normalize_step(s) for s in (arm.install.get("steps") or [])]
+        arms.append({
+            "id": arm.id,
+            "name": arm.name,
+            "verified": arm.probe != "unverified",
+            "requires": arm.requires,
+            "method": arm.install.get("method"),
+            "command": arm.install.get("command"),
+            "package_url": arm.install.get("package_url"),
+            "docs_url": arm.install.get("docs_url"),
+            "client_config": arm.install.get("client_config"),
+            "steps": steps,
+            "agent_runnable_steps": sum(1 for s in steps if s["actor"] in AGENT_ACTORS),
+            "note": arm.install.get("note"),
+        })
+
+    return {"domain": config.name, "arms": arms}
 
 
 def render_install_plan(config: CocktailConfig, arm_ids: list[str] | None = None) -> tuple[str, list[str]]:

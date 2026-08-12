@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from mcp_cocktail import __version__
-from mcp_cocktail.acquire import render_install_plan
+from mcp_cocktail.acquire import install_plan_data, render_install_plan
 from mcp_cocktail.config import CocktailConfig, TrapsConfig
 from mcp_cocktail.console import ensure_utf8_streams
 from mcp_cocktail.discover import (
@@ -35,6 +35,7 @@ from mcp_cocktail.installer import (
     provision_tree,
     uninstall_hook,
 )
+from mcp_cocktail.preflight import print_preflight_report, run_preflight
 from mcp_cocktail.miner import cmd_sweep, print_sweep_report, summarize_transcript, parse_blocks
 from mcp_cocktail.proxy import run_proxy
 from mcp_cocktail.runner import create_trial
@@ -213,11 +214,26 @@ def cmd_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_preflight(args: argparse.Namespace) -> int:
+    config = CocktailConfig.load(Path.cwd())
+    if not config.arms:
+        print("No arms defined. Run `mcp-cocktail setup --preset <domain>` first.")
+        return 2
+
+    readiness, unity_version = run_preflight(config)
+    print_preflight_report(readiness, unity_version, config)
+    return 0
+
+
 def cmd_install(args: argparse.Namespace) -> int:
     config = CocktailConfig.load(Path.cwd())
     if not config.arms:
         print("No arms defined. Run `mcp-cocktail setup --preset <domain>` first.")
         return 2
+
+    if args.json:
+        print(json.dumps(install_plan_data(config, args.arms), indent=2))
+        return 0
 
     text, unknown = render_install_plan(config, args.arms)
     print(text)
@@ -462,8 +478,11 @@ def main(argv: list[str] | None = None) -> int:
     p_setup.add_argument("--global", dest="global_settings", action="store_true", help="Target global settings")
     p_setup.add_argument("--settings", help="Explicit path to settings.json")
 
+    subparsers.add_parser("preflight", help="Report which arms this machine has the prerequisites for")
+
     p_inst = subparsers.add_parser("install", help="Print how to obtain and register arms (prints steps, never runs them)")
     p_inst.add_argument("arms", nargs="*", help="Arm IDs to plan for (default: all arms in the manifest)")
+    p_inst.add_argument("--json", action="store_true", help="Emit the plan as JSON for an agent to act on")
 
     p_disc = subparsers.add_parser("discover", help="Discover open-source MCP servers and CLIs for a domain")
     p_disc.add_argument("--domain", default="unity", help="Target software domain (e.g. unity, postgres, docker, github)")
@@ -548,6 +567,7 @@ def main(argv: list[str] | None = None) -> int:
         "init": cmd_init,
         "setup": cmd_setup,
         "install": cmd_install,
+        "preflight": cmd_preflight,
         "discover": cmd_discover,
         "sync": cmd_sync,
         "doctor": cmd_doctor,
