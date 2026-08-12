@@ -1111,6 +1111,14 @@ def probe_mcp_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHeal
                         f"MCP transport and target are responsive: {target_detail}.",
                         {"status": status_code, "handshake": detail, **target_evidence},
                     )
+                if target_evidence.get("project_roots"):
+                    return ArmHealthResult(
+                        arm.id, arm.name, "WRONG_PROJECT",
+                        f"MCP transport at {url} belongs to another Unity project: "
+                        f"{', '.join(target_evidence['project_roots'])}. Refusing to treat the "
+                        "fixed port as this workspace's arm.",
+                        {"status": status_code, "handshake": detail, **target_evidence},
+                    )
                 return ArmHealthResult(
                     arm.id, arm.name, "DEGRADED",
                     f"MCP transport responds at {url}, but the target probe failed: {target_detail}.",
@@ -1499,6 +1507,7 @@ def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) 
         "INSTALLED_ONLY": "[INSTALLED?]",
         "SOCKET_BOUND_ONLY": "[BOUND_ONLY (P4)]",
         "BOUND_ELSEWHERE": "[WRONG_PROJECT (P4)]",
+        "WRONG_PROJECT": "[WRONG_PROJECT (P4)]",
         "EXTERNAL_CHECK_REQUIRED": "[EXTERNAL CHECK]",
         "UNCONFIGURED": "[UNCONFIGURED]",
         "OFFLINE": "[OFFLINE]",

@@ -260,9 +260,17 @@ def plan_trial(
             # executor can prove it has provisioned an isolated workspace clone.
             shared_resources = [UNITY_SHARED_RESOURCE]
             stage_id = f"arm-{arm.id}"
+            declared_task_capabilities = [
+                item for item in arm.capabilities if item not in {"mcp", "cli"}
+            ]
+            stage_capability = (
+                capability
+                or (declared_task_capabilities[0] if declared_task_capabilities else None)
+                or (arm.capabilities[0] if arm.capabilities else "benchmark-task")
+            )
             planned_stages.append(TrialStage(
                 id=stage_id,
-                capability=capability or "benchmark-task",
+                capability=stage_capability,
                 assigned_arm=arm.id,
             ))
             task_payloads.append({
@@ -272,6 +280,7 @@ def plan_trial(
                 "description": arm.description,
                 "arm_type": arm.type,
                 "capabilities": arm.capabilities,
+                "evidence_capability": stage_capability,
                 "requires_exclusive_input": arm.type.lower() == "gui",
                 "shared_resources": shared_resources,
                 "requires_mutation_lease": bool(shared_resources),

@@ -3,6 +3,24 @@
 All notable changes to mcp-cocktail are recorded here. Versions follow Semantic Versioning;
 release-candidate suffixes use Python's PEP 440 spelling in package metadata.
 
+## 0.4.0rc2 — 2026-08-12
+
+Acceptance follow-up after a concurrent Unity project exposed Coplay's fixed-port collision risk.
+
+- Doctor now gives an exact-project identity mismatch the explicit `WRONG_PROJECT` status instead
+  of folding it into generic degradation.
+- `mcp-cocktail install coplay-mcp` now provides the pinned UPM route and refuses to proceed when
+  port 8080 is occupied without independently proving this project is operational.
+- The provisioned three-way helper likewise refuses to reuse or replace an answering port 8080
+  unless Doctor proves it belongs to the requested project.
+- Lease recovery errors now retain the CLI's structured `{ok:false,error}` response instead of
+  escaping as a traceback.
+- Unfiltered plans record each stage under a declared task capability (for example,
+  `editor-automation`) rather than the undeclared `benchmark-task` placeholder. The chosen value
+  is exposed as `evidence_capability` in `trial-tasks.json`.
+- Official Pipeline acquisition notes now call out Unity Cloud/package-registry authentication;
+  Cocktail does not mistake a printed remedy for proof it succeeded.
+
 ## 0.4.0rc1 — 2026-08-12
 
 This release candidate turns Cocktail's multi-arm trial feature from a brief generator with

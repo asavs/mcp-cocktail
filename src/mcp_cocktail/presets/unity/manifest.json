@@ -28,6 +28,24 @@
       "health_check_layer": "target_operation",
       "binding_path": "data.instances[].project",
       "install_hint": "Ships with the com.unity.pipeline package in the Unity project; `unity upgrade --check` reports the installed version.",
+      "install": {
+        "method": "unity-pipeline",
+        "command": "unity pipeline install",
+        "requires_editor": true,
+        "note": "The Unity package registry requires valid Unity Cloud credentials. A Personal Editor license alone does not prove registry authentication. Treat registry/auth errors or an unresolved Packages/manifest.json entry as install failure; do not infer success from command exit or the printed remedy.",
+        "steps": [
+          {
+            "actor": "shell",
+            "text": "Verify Unity Cloud authentication and run the official Pipeline installer from the target project.",
+            "run": "unity pipeline install"
+          },
+          {
+            "actor": "shell",
+            "text": "After Unity finishes package resolution, require an exact-project target operation.",
+            "run": "mcp-cocktail doctor --require official-unity-cli"
+          }
+        ]
+      },
       "capabilities": [
         "editor-automation",
         "cli"
@@ -49,6 +67,28 @@
       "health_check_layer": "target_operation",
       "binding_path": "data.instances[].project",
       "install_hint": "Same `unity` CLI as official-unity-cli; register it with your harness at LOCAL scope pinned to this project, or it binds elsewhere.",
+      "install": {
+        "method": "unity-pipeline",
+        "command": "unity pipeline install",
+        "requires_editor": true,
+        "note": "This shares the Pipeline installation with official-unity-cli, then additionally requires local harness registration. Unity package registry authentication must succeed; a Personal Editor license alone is not registry authentication.",
+        "steps": [
+          {
+            "actor": "shell",
+            "text": "Install Pipeline from the target project after verifying Unity Cloud authentication.",
+            "run": "unity pipeline install"
+          },
+          {
+            "actor": "agent-edit",
+            "text": "Register the official MCP server at project-local scope; do not use a global binding that can select another project."
+          },
+          {
+            "actor": "shell",
+            "text": "Require exact-project health after package resolution and registration.",
+            "run": "mcp-cocktail doctor --require official-unity-mcp"
+          }
+        ]
+      },
       "capabilities": [
         "editor-automation",
         "mcp"
@@ -85,6 +125,28 @@
         "reject_match": "no[_ -]?unity[_ -]?session|unity ping.*not answered|timed? out"
       },
       "install_hint": "Run the provisioned tools/three-way-setup.sh to start the server, then register the Editor via Window/MCP for Unity -> Connect.",
+      "install": {
+        "method": "unity-upm-git",
+        "package_url": "https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#v10.0.0",
+        "docs_url": "https://github.com/CoplayDev/unity-mcp",
+        "requires_editor": true,
+        "note": "Coplay's HTTP bridge uses the fixed machine-wide port 127.0.0.1:8080. Before adding or opening the package, run mcp-cocktail doctor/install from the intended project. If another project owns 8080, stop: package auto-start may displace that bridge. Cocktail never executes these install steps.",
+        "steps": [
+          {
+            "actor": "shell",
+            "text": "Confirm the collision check printed by this install plan did not block. A WRONG_PROJECT/fixed-port collision is a stop condition; do not continue."
+          },
+          {
+            "actor": "agent-edit",
+            "text": "After the collision check passes, add com.coplaydev.unity-mcp to Packages/manifest.json using the pinned UPM git URL.",
+            "run": "https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#v10.0.0"
+          },
+          {
+            "actor": "human-gui",
+            "text": "Open the intended project, resolve any Unity modal, then use Window > MCP for Unity > Connect. Re-run doctor and require exact project identity before acting."
+          }
+        ]
+      },
       "capabilities": [
         "editor-automation",
         "mcp"

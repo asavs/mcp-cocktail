@@ -22,6 +22,7 @@ from mcp_cocktail.discover import (
 from mcp_cocktail.doctor import (
     READY_STATUSES,
     capability_health_results,
+    doctor_check_arm,
     evaluate_requirements,
     missing_setup_script,
     print_doctor_report,
@@ -38,7 +39,7 @@ from mcp_cocktail.installer import (
     uninstall_hook,
 )
 from mcp_cocktail.lifecycle import LifecycleError, TrialLifecycle
-from mcp_cocktail.trial_state import LeaseBusyError
+from mcp_cocktail.trial_state import LeaseBusyError, LeaseNotExpiredError, LeaseOwnershipError
 from mcp_cocktail.preflight import print_preflight_report, run_preflight
 from mcp_cocktail.miner import cmd_sweep, print_sweep_report, summarize_transcript, parse_blocks
 from mcp_cocktail.proxy import run_proxy
@@ -235,9 +236,45 @@ def cmd_install(args: argparse.Namespace) -> int:
         print("No arms defined. Run `mcp-cocktail setup --preset <domain>` first.")
         return 2
 
+    selected = set(args.arms or [arm.id for arm in config.arms])
+    coplay_result = None
+    if "coplay-mcp" in selected:
+        coplay = next((arm for arm in config.arms if arm.id == "coplay-mcp"), None)
+        if coplay is not None:
+            coplay_result = doctor_check_arm(coplay, config.root_dir)
+
+    unsafe_occupied = {
+        "WRONG_PROJECT", "DEGRADED", "TRANSPORT_ONLY", "TARGET_ONLY",
+        "SOCKET_BOUND_ONLY", "BOUND_ELSEWHERE",
+    }
+    blocked = coplay_result is not None and coplay_result.status in unsafe_occupied
+
     if args.json:
-        print(json.dumps(install_plan_data(config, args.arms), indent=2))
-        return 0
+        if blocked:
+            data = {"domain": config.name, "arms": [], "blocked": {
+                "reason": "fixed-port-collision",
+                "status": coplay_result.status,
+                "message": coplay_result.message,
+                "action": "Do not add or start Coplay until the existing port-8080 owner is deliberately stopped or moved.",
+            }}
+        else:
+            data = install_plan_data(config, args.arms)
+        print(json.dumps(data, indent=2))
+        return 1 if blocked else 0
+
+    if coplay_result is not None:
+        if blocked:
+            print("\n[BLOCKED: FIXED-PORT COLLISION]")
+            print(coplay_result.message)
+            print("Do not add/start the Coplay package in this Editor until the existing")
+            print("port-8080 owner is deliberately stopped or moved; package auto-start can")
+            print("displace another project's bridge. Cocktail will not execute install steps.")
+            return 1
+        if coplay_result.status in READY_STATUSES:
+            print("\n[ALREADY OPERATIONAL]")
+            print("Coplay already proves a target operation against this exact project;")
+            print("there is no install action to perform.")
+            return 0
 
     text, unknown = render_install_plan(config, args.arms)
     print(text)
@@ -514,7 +551,10 @@ def cmd_trial(args: argparse.Namespace) -> int:
             raise LifecycleError(f"Unknown lifecycle action: {args.action}")
         print(json.dumps({"ok": True, "result": result}, indent=2, default=str))
         return 0
-    except (LifecycleError, LeaseBusyError, ValueError, KeyError, OSError, json.JSONDecodeError) as exc:
+    except (
+        LifecycleError, LeaseBusyError, LeaseOwnershipError, LeaseNotExpiredError,
+        ValueError, KeyError, OSError, json.JSONDecodeError,
+    ) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}))
         return 2
 

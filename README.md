@@ -130,6 +130,12 @@ were never meant to have is distinguishable from something that broke. `doctor` 
 two arms report READY on the same binary — three separate Unity CLI projects all install an
 executable named `unity-cli`, and only one of them can own that name on PATH.
 
+Coplay's HTTP bridge is different: it uses the fixed machine-wide port `127.0.0.1:8080` even
+though Unity projects are independent. Before adding or starting that package, run
+`mcp-cocktail install coplay-mcp` from the intended project. Cocktail performs a read-only
+exact-project probe and blocks the install handoff if another project—or an unidentifiable
+listener—already owns the port. Do not let a new Editor auto-start over that warning.
+
 ### 2a. Check Prerequisites (`mcp-cocktail preflight`)
 
 ```bash
@@ -223,6 +229,11 @@ not execute agents. The legacy `--exec` option now exits with an error before ge
 artifacts: earlier releases recorded the option but never invoked a harness. The generated
 `trial-tasks.json` is the explicit handoff boundary for Codex, Claude, OMP, or another agent
 harness.
+
+When `--capability` is omitted, each arm's stage uses its first declared non-transport task
+capability (for example, `editor-automation`, not `mcp`). The exact value appears as
+`evidence_capability` in `trial-tasks.json`, so adapters know which
+`doctor --require ARM:CAPABILITY` gate the resulting evidence can support.
 
 An adapter drives the plan through machine-readable lifecycle commands:
 

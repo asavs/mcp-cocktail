@@ -54,8 +54,8 @@ def test_open_circuit_prevents_begin(tmp_path: Path):
     holder = lifecycle.acquire("adapter")
     state_path = lifecycle.trial_dir / "trial-state.json"
     state = json.loads(state_path.read_text("utf-8"))
-    state["circuits"]["coplay:benchmark-task"] = {
-        "state": "open", "arm": "coplay", "capability": "benchmark-task",
+    state["circuits"]["coplay:editor-automation"] = {
+        "state": "open", "arm": "coplay", "capability": "editor-automation",
     }
     state_path.write_text(json.dumps(state), encoding="utf-8")
 

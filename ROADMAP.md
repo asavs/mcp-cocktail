@@ -4,7 +4,7 @@ This document outlines the architectural vision and development roadmap for `mcp
 
 ---
 
-## 🟢 Current State (v0.4.0rc1)
+## 🟢 Current State (v0.4.0rc2)
 
 - **Domain-Agnostic Core:** Configurable workspace manifest (`mcp-cocktail.json`) and rule store (`traps.json`).
 - **Real-Time Guardrail Engine:** PreToolUse hook execution (< 5ms stdin/stdout interception) with read-only verb filtering and session cooldown state.

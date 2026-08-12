@@ -221,6 +221,34 @@ def test_capability_filter_excludes_arms_that_do_a_different_job(tmp_path: Path)
     assert set(everything["briefs"]) == {"bridge", "installer"}
 
 
+def test_unfiltered_plan_records_evidence_under_each_arms_declared_task_capability(tmp_path: Path):
+    config = CocktailConfig(
+        name="unity", description="", root_dir=tmp_path,
+        arms=[
+            ArmConfig(
+                id="coplay", name="Coplay", type="mcp",
+                capabilities=["editor-automation", "mcp"],
+            ),
+            ArmConfig(id="gui", name="GUI", type="gui", capabilities=["visual-inspection"]),
+        ],
+    )
+
+    create_trial("T-CAPS", "bounded task", config)
+    state = json.loads(
+        (tmp_path / "docs" / "trials" / "T-CAPS" / "trial-state.json").read_text("utf-8")
+    )
+    tasks = json.loads(
+        (tmp_path / "docs" / "trials" / "T-CAPS" / "trial-tasks.json").read_text("utf-8")
+    )
+
+    assert [stage["capability"] for stage in state["stages"]] == [
+        "editor-automation", "visual-inspection",
+    ]
+    assert [task["evidence_capability"] for task in tasks] == [
+        "editor-automation", "visual-inspection",
+    ]
+
+
 def test_explicit_arms_still_win_over_the_capability_filter(tmp_path: Path):
     config = CocktailConfig(
         name="unity", description="", root_dir=tmp_path,

@@ -868,6 +868,24 @@ def test_mcp_target_timeout_is_degraded_despite_transport_handshake():
     assert "transport responds" in res.message
 
 
+def test_fixed_mcp_port_serving_another_project_is_wrong_project_not_degraded(tmp_path: Path):
+    with local_server(b"Not Acceptable", status=406, post_body=JSONRPC_OK, post_status=200) as url:
+        arm = ArmConfig(
+            id="coplay-mcp", name="Coplay", type="mcp", health_check=url,
+            target_check={"kind": "mcp_tool", "name": "read_console"},
+        )
+        evidence = {"project_roots": [r"C:\UnityProjects\another"]}
+        with patch(
+            "mcp_cocktail.doctor.probe_mcp_target",
+            return_value=(False, "identity mismatch", evidence),
+        ):
+            result = probe_mcp_arm(arm, tmp_path)
+
+    assert result.status == "WRONG_PROJECT"
+    assert "another Unity project" in result.message
+    assert result.details["project_roots"] == [r"C:\UnityProjects\another"]
+
+
 def test_406_with_no_handshake_is_still_bound_only():
     """The P4 verdict survives for a listener that really cannot serve MCP."""
     with local_server(b"Not Acceptable", status=406) as url:

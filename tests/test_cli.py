@@ -252,6 +252,51 @@ def test_install_plan_prints_steps_for_a_named_arm(tmp_path: Path, capsys):
     assert "never executed" in out, "the plan must not read as something that ran"
 
 
+def test_coplay_install_has_a_route_and_blocks_a_wrong_project_port(
+    tmp_path: Path, monkeypatch, capsys
+):
+    monkeypatch.chdir(tmp_path)
+    with patch("mcp_cocktail.cli.run_doctor", return_value=_health("READY")):
+        main(["setup", "--preset", "unity", "--settings", str(tmp_path / "s.json")])
+    capsys.readouterr()
+    wrong = ArmHealthResult(
+        "coplay-mcp", "Coplay", "WRONG_PROJECT",
+        r"Port serves C:\another-project", {"project_roots": [r"C:\another-project"]},
+    )
+    with patch("mcp_cocktail.cli.doctor_check_arm", return_value=wrong):
+        assert main(["install", "coplay-mcp"]) == 1
+
+    out = capsys.readouterr().out
+    assert "FIXED-PORT COLLISION" in out
+    assert "Do not add/start" in out
+    assert "github.com/CoplayDev/unity-mcp.git" not in out
+
+    with patch("mcp_cocktail.cli.doctor_check_arm", return_value=wrong):
+        assert main(["install", "coplay-mcp", "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["blocked"]["reason"] == "fixed-port-collision"
+    assert payload["arms"] == []
+
+    down = ArmHealthResult("coplay-mcp", "Coplay", "NOT_RUNNING", "nothing listening", {})
+    with patch("mcp_cocktail.cli.doctor_check_arm", return_value=down):
+        assert main(["install", "coplay-mcp"]) == 0
+    assert "github.com/CoplayDev/unity-mcp.git" in capsys.readouterr().out
+
+
+def test_trial_recover_missing_lease_returns_structured_error(tmp_path: Path, monkeypatch, capsys):
+    _write_manifest(tmp_path, [{"id": "a", "name": "A", "type": "cli"}])
+    monkeypatch.chdir(tmp_path)
+    assert main(["plan", "T-RECOVER", "task"]) == 0
+    capsys.readouterr()
+
+    assert main([
+        "trial", "recover", "T-RECOVER", "--owner", "operator", "--token", "gone",
+    ]) == 2
+    response = json.loads(capsys.readouterr().out)
+    assert response["ok"] is False
+    assert "no longer exists" in response["error"]
+
+
 def test_install_plan_rejects_an_unknown_arm(tmp_path: Path, capsys):
     with patch("pathlib.Path.cwd", return_value=tmp_path), \
             patch("mcp_cocktail.cli.run_doctor", return_value=_health("READY")):
