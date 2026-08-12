@@ -38,6 +38,18 @@ def test_cocktail_config_load(tmp_path: Path):
     assert cfg.trial_defaults.timeout_seconds == 120
 
 
+def test_cocktail_config_loads_gui_arm_type(tmp_path: Path):
+    manifest = {
+        "name": "gui-env",
+        "arms": [{"id": "computer-use", "type": "gui", "capabilities": "visual-inspection"}],
+    }
+    (tmp_path / "mcp-cocktail.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    arm = CocktailConfig.load(tmp_path).arms[0]
+    assert arm.type == "gui"
+    assert arm.capabilities == ["visual-inspection"]
+
+
 def test_traps_config_load(tmp_path: Path):
     traps_data = {
         "version": "1.0",

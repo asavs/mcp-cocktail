@@ -6,7 +6,7 @@ When software vendors take months or years to release official Model Context Pro
 
 `mcp-cocktail` provides the machinery to:
 - **Inject Real-Time PreToolUse Guardrails:** Intercept tool calls right *before* a known trap is sprung (`mcp-cocktail check` / `install-hook`).
-- **Benchmark Multi-Arm Ecosystems:** Run subagents in unison across all available MCPs and CLIs (`mcp-cocktail run`).
+- **Plan Multi-Arm Benchmarks:** Generate consistent briefs and task payloads across available MCPs and CLIs (`mcp-cocktail plan`) for an external harness to execute.
 - **Log & Mine Friction:** Capture real-time friction notes (`mcp-cocktail note`) and mine subagent transcripts for failure patterns P1-P5 (`mcp-cocktail mine`).
 - **Drive Weakness-Maximizing RSI Loops:** Synthesize scorecards (`mcp-cocktail scorecard --rsi`) and auto-derive **Weakest Valid Guardrails** (`traps.json`) based on Bennett (2023).
 
@@ -61,8 +61,16 @@ mcp-cocktail discover --domain unity --agentic
 ```json
 {
   "name": "unity-ecosystem",
-  "description": "Multi-arm evaluation manifest for Unity CLI and MCP servers",
+  "description": "Multi-arm evaluation manifest for Unity CLI, MCP, and GUI automation",
   "arms": [
+    {
+      "id": "computer-use",
+      "name": "Unity Editor via Computer Use",
+      "type": "gui",
+      "capabilities": ["editor-gui-automation", "visual-inspection"],
+      "probe": "none",
+      "probe_reason": "Computer use is supplied by the active agent harness."
+    },
     {
       "id": "unity-cli",
       "name": "Official Unity CLI",
@@ -103,8 +111,13 @@ listeners to report an honest status summary:
 mcp-cocktail doctor
 ```
 
-Reports:
-- 🟢 `[READY]` (health check passed, or an MCP `initialize` handshake was acknowledged)
+Reports layered evidence rather than treating every answering socket as ready:
+- `[OPERATIONAL]` a bounded target operation completed through this arm against the intended project
+- `[TRANSPORT ONLY]` the process/protocol answered, but no target operation was proven
+- `[DELIVERY UNVERIFIED]` the shared Unity backend answered, but this arm's delivery route was not exercised
+- `[DEGRADED]` transport exists but a target operation failed or timed out
+- `[EXECUTION REPORTED]` an external adapter reported capability success; useful provenance, but not independent live-health proof and not accepted by `--require`
+- `[AMBIGUOUS IDENTITY]` multiple arm definitions resolve to the same executable name
 - 🟡 `[BOUND_ONLY (P4)]` (something is listening, but it is not a usable MCP session — unauthenticated, unregistered, not speaking MCP at all, or accepting connections and then never answering)
 - 🟡 `[WRONG_PROJECT (P4)]` (arm is live and healthy, but serving a different project than this workspace)
 - 🟠 `[NOT_RUNNING]` (the tool is installed and answered — its backend is down. Start it, or fall back to the CLI)
@@ -160,6 +173,7 @@ fail merely because some arm is down. To assert on the arms you actually depend 
 
 ```bash
 mcp-cocktail doctor --require official-unity-cli --require official-unity-mcp
+mcp-cocktail doctor --capability editmode-tests --require coplay-mcp:editmode-tests
 ```
 
 Exits `1` if a required arm is not READY, `2` if a requirement names an unknown arm or the
@@ -187,18 +201,60 @@ Exposes:
 - `mcp__mcp-cocktail-server__note_friction`
 - `mcp__mcp-cocktail-server__check_guardrail`
 - `mcp__mcp-cocktail-server__get_scorecard`
+- `mcp__mcp-cocktail-server__plan_trial`
 - `mcp__mcp-cocktail-server__run_trial`
 
-### 4. Generate Multi-Arm Trial Briefs & Subagent Payloads
-Create standardized briefs and subagent task payloads for subagents to execute the same task independently across defined arms:
+### 4. Plan Multi-Arm Trials
+Create standardized briefs and harness-neutral task payloads. Cocktail deliberately does not
+launch Codex, Claude, OMP, or another harness: their process, cancellation, and permission models
+are not interchangeable. It does provide one executor-neutral lifecycle that adapters can call,
+so safety and evidence semantics do not have to be reimplemented by every harness:
 
 ```bash
-# Standard serial trial run (< 1s instant baseline scene reload)
-mcp-cocktail run T-001 "Build scene hierarchy for vehicle physics" --exec auto
+# Plan a serial trial (generates files only)
+mcp-cocktail plan T-001 "Build scene hierarchy for vehicle physics"
 
-# Visual comparison mode (leaves temporary scene files for human Unity Editor review)
-mcp-cocktail run T-001 "Build scene hierarchy" --compare-visual
+# Ask the executing harness to use per-arm temporary scenes for visual comparison
+mcp-cocktail plan T-001 "Build scene hierarchy" --compare-visual
 ```
+
+`mcp-cocktail run` remains a backward-compatible alias for `plan`, but prints that it does
+not execute agents. The legacy `--exec` option now exits with an error before generating
+artifacts: earlier releases recorded the option but never invoked a harness. The generated
+`trial-tasks.json` is the explicit handoff boundary for Codex, Claude, OMP, or another agent
+harness.
+
+An adapter drives the plan through machine-readable lifecycle commands:
+
+```bash
+mcp-cocktail trial acquire T-001 --owner codex-adapter
+mcp-cocktail trial begin T-001 --stage arm-coplay-mcp --arm coplay-mcp --owner codex-adapter --token TOKEN
+mcp-cocktail trial finish T-001 --stage arm-coplay-mcp --arm coplay-mcp --owner codex-adapter --token TOKEN --outcome succeeded --evidence '{"kind":"test-run","summary":"7/7 passed"}'
+mcp-cocktail trial release T-001 --owner codex-adapter --token TOKEN
+```
+
+The lifecycle enforces dependency and capability-circuit admission, a token-owned workspace/Editor
+mutation lease, per-attempt before/after inventories, and cross-arm evidence/artifact provenance.
+Every planned arm is treated as potentially mutating and therefore shares the lease unless a future
+executor provisions a genuinely isolated workspace. This means agents may investigate in parallel,
+but mutations against one Unity project are serial. Cocktail detects changes; it never silently
+resets, deletes, or rolls back user files. Expired leases are not stolen automatically.
+If an adapter crashes, an operator can explicitly recover a proven-expired lease with
+`mcp-cocktail trial recover T-001 --owner operator --token EXPECTED_TOKEN`; Cocktail requires
+the exact old token and writes durable recovery evidence before removing it.
+
+Trial IDs are single filesystem-safe identifiers such as `T-001`. Planning atomically reserves
+the ID and refuses to replace an existing trial directory, so concurrent planners cannot overwrite
+one another's briefs or evidence. Choose a new ID to rerun a trial.
+
+GUI arms use `"type": "gui"`. Their generated briefs require exclusive mouse/keyboard
+control, serial access to a shared Editor, before-and-after screenshots, and visible state
+read-back after mutations. Cocktail records `requires_exclusive_input: true` in their task
+payloads; the external agent harness that executes those payloads must enforce it.
+An unfiltered plan now generates all 12 preset briefs, including `computer-use`; select
+`--capability editor-gui-automation` for a GUI-only trial or name arms explicitly to exclude it.
+`doctor` reports this arm as `EXTERNAL_CHECK_REQUIRED`: it cannot honestly infer either harness
+availability or Unity responsiveness from a process or socket, and does not claim the arm READY.
 
 Generates:
 - `docs/trials/T-001/brief-unity-cli.md`
@@ -280,7 +336,7 @@ The Unity domain ships in two halves.
 
 The **preset** — what `setup --preset unity` actually copies into your workspace — lives inside
 the package at `src/mcp_cocktail/presets/unity/`, so it travels in the wheel:
-- Multi-arm evaluation manifest (`manifest.json`) with 11 curated arms
+- Multi-arm evaluation manifest (`manifest.json`) with 12 curated arms, including computer use
 - Comprehensive Unity trap rule store (`traps.json`)
 - Domain helper scripts (`tools/`), provisioned to `<workspace>/tools/`
 

@@ -4,7 +4,7 @@ Exposes mcp-cocktail tools directly into agent tool palettes:
   - note_friction
   - check_guardrail
   - get_scorecard
-  - run_trial
+  - plan_trial (plus legacy run_trial alias)
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from mcp_cocktail import __version__
 from mcp_cocktail.config import CocktailConfig, TrapsConfig
 from mcp_cocktail.guardrail import evaluate_rules, load_state, save_state, get_state_path
 from mcp_cocktail.inbox import append_note
-from mcp_cocktail.runner import create_trial
+from mcp_cocktail.runner import TrialPlanError, create_trial
 from mcp_cocktail.scorecard import generate_scorecard
 from mcp_cocktail.weakness import derive_weakest_rule
 from mcp_cocktail.console import ensure_utf8_streams
@@ -58,8 +58,20 @@ TOOLS_MANIFEST = [
         },
     },
     {
+        "name": "plan_trial",
+        "description": "Generate multi-arm trial briefs and task payloads. Does not launch agents, schedule arms, reset state, or execute the trial.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "trial_id": {"type": "string", "description": "Trial identifier (e.g. T-001)"},
+                "task_description": {"type": "string", "description": "Detailed task requirements for benchmark"},
+            },
+            "required": ["trial_id", "task_description"],
+        },
+    },
+    {
         "name": "run_trial",
-        "description": "Generate multi-arm trial briefs and task payloads for benchmark execution.",
+        "description": "Legacy alias for plan_trial. Generates artifacts only; does not execute agents or tools.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -145,11 +157,18 @@ def handle_rpc_request(request: dict[str, Any]) -> dict[str, Any] | None:
                 },
             }
 
-        elif tool_name == "run_trial":
+        elif tool_name in ("plan_trial", "run_trial"):
             trial_id = arguments.get("trial_id", "T-001")
             task_desc = arguments.get("task_description", "")
             config = CocktailConfig.load()
-            res = create_trial(trial_id, task_desc, config)
+            try:
+                res = create_trial(trial_id, task_desc, config)
+            except TrialPlanError as exc:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {"code": -32001, "message": str(exc)},
+                }
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
@@ -157,7 +176,7 @@ def handle_rpc_request(request: dict[str, Any]) -> dict[str, Any] | None:
                     "content": [
                         {
                             "type": "text",
-                            "text": f"Created trial {trial_id}.\nTask Manifest: {res['tasks_file']}\nBriefs generated: {len(res['briefs'])}",
+                            "text": f"Planned trial {trial_id}; no agents or tools were executed.\nTask Manifest: {res['tasks_file']}\nBriefs generated: {len(res['briefs'])}",
                         }
                     ]
                 },
