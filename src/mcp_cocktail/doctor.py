@@ -426,6 +426,19 @@ def probe_websocket_listener(host: str, port: int, timeout: float = 2.0) -> tupl
 
         if data:
             first = data.split(b"\r\n", 1)[0].decode("ascii", errors="replace")
+
+            # A WebSocket-aware server answers an upgrade request with 101 when
+            # it accepts, or a 4xx/5xx refusal when it will not -- never a plain
+            # 200, which means an ordinary web server is serving the path and
+            # ignoring the Upgrade header entirely. Reporting that READY would
+            # green-light a squatter on the arm's port, the same mistake as
+            # treating HTTP 200 as proof of MCP.
+            if first.split(" ")[1:2] == ["200"]:
+                return "SOCKET_BOUND_ONLY", (
+                    f"answered a WebSocket upgrade with plain HTTP 200 ({first}) -- something is "
+                    "listening on that port, but it is not a WebSocket endpoint"
+                )
+
             return "READY", f"WebSocket listener answered the handshake ({first})"
 
         # A clean close is still the accept loop doing its job.

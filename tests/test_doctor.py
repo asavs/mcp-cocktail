@@ -374,6 +374,22 @@ def test_websocket_listener_that_accepts_then_goes_silent_is_bound_only():
     assert "never answered" in res.message
 
 
+def test_plain_web_server_squatting_on_the_port_is_not_ready():
+    """A WebSocket-aware server answers an upgrade with 101 or a 4xx/5xx
+    refusal, never a bare 200 -- that means an ordinary web server holds the
+    port and ignored the Upgrade header. Calling it READY would repeat, on
+    this transport, the 'HTTP 200 proves MCP' mistake."""
+    with local_server(b"<html>hello</html>", content_type="text/html") as url:
+        port = int(url.rsplit(":", 1)[1].split("/")[0])
+        arm = ArmConfig(id="squatter", name="Squatter", type="mcp",
+                        health_check=f"ws://127.0.0.1:{port}", probe="websocket")
+        res = probe_mcp_arm(arm)
+
+    assert res.status == "SOCKET_BOUND_ONLY"
+    assert res.status not in READY_STATUSES
+    assert "not a WebSocket endpoint" in res.message
+
+
 def test_websocket_probe_on_a_closed_port_is_not_running():
     arm = ArmConfig(id="cg", name="CG", type="mcp",
                     health_check="ws://127.0.0.1:59997", probe="websocket")
