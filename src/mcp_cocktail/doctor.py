@@ -1095,6 +1095,17 @@ def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) 
             print("Only one program can own that name on PATH, so at most one of these arms is")
             print("really installed -- the others are reporting on someone else's executable.")
 
+            # The answer was already in hand and being thrown away: which()
+            # returns the path, and the install location names the winner far
+            # more reliably than any version string can. `go/bin` is the Go
+            # arm, an npm prefix is the npm one. Print it and the ambiguity is
+            # resolvable by eye instead of by experiment.
+            resolved = shutil.which(binary)
+            if resolved:
+                print(f"That name currently resolves to: {resolved}")
+                print("Point the other arms at their own absolute paths in .agents/manifest.json")
+                print("to tell them apart, or ignore the ones you did not install.")
+
     # Say once what the row marker means, rather than on every row that
     # carries it.
     no_route = sum(1 for r in results if NO_ROUTE_MARKER in r.message)

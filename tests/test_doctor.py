@@ -946,3 +946,23 @@ def test_no_arm_ships_the_invalid_ivanmurzak_subpath():
             [s for s in (install.get("steps") or []) if isinstance(s, dict)],
         ])
         assert "Assets/root" not in actionable, f"{arm.id} still ships the invalid subpath"
+
+
+def test_collision_warning_names_the_program_that_actually_won(capsys, monkeypatch):
+    """The discriminator was already in hand and discarded: which() returns the
+    path, and an install location identifies the winner far more reliably than
+    a version string. On the field machine `unity-cli` resolved to go/bin,
+    which names the Go arm outright."""
+    monkeypatch.setattr("mcp_cocktail.doctor.shutil.which",
+                        lambda name: r"C:\Users\dev\go\bin\unity-cli.exe" if name == "unity-cli" else None)
+
+    config = CocktailConfig(
+        name="x", description="",
+        arms=[ArmConfig(id=n, name=n, type="cli", command="unity-cli",
+                        health_check="unity-cli --version") for n in ("a", "b")],
+    )
+    results = [ArmHealthResult(n, n, "INSTALLED_ONLY", "installed", {}) for n in ("a", "b")]
+    print_doctor_report(results, config)
+
+    out = capsys.readouterr().out
+    assert r"go\bin\unity-cli.exe" in out, "the resolved path is the whole answer"
