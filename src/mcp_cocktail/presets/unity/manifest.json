@@ -13,7 +13,11 @@
       },
       "health_check": "unity status --json",
       "binding_path": "data.instances[].project",
-      "install_hint": "Ships with the com.unity.pipeline package in the Unity project; `unity upgrade --check` reports the installed version."
+      "install_hint": "Ships with the com.unity.pipeline package in the Unity project; `unity upgrade --check` reports the installed version.",
+      "capabilities": [
+        "editor-automation",
+        "cli"
+      ]
     },
     {
       "id": "official-unity-mcp",
@@ -23,7 +27,11 @@
       "tool_prefix": "mcp__unity-editor-mcp__",
       "health_check": "unity status --json",
       "binding_path": "data.instances[].project",
-      "install_hint": "Same `unity` CLI as official-unity-cli; register it with your harness at LOCAL scope pinned to this project, or it binds elsewhere."
+      "install_hint": "Same `unity` CLI as official-unity-cli; register it with your harness at LOCAL scope pinned to this project, or it binds elsewhere.",
+      "capabilities": [
+        "editor-automation",
+        "mcp"
+      ]
     },
     {
       "id": "coplay-mcp",
@@ -33,7 +41,11 @@
       "tool_prefix": "mcp__UnityMCP__",
       "setup_script": "tools/three-way-setup.sh",
       "health_check": "http://127.0.0.1:8080/mcp",
-      "install_hint": "Run the provisioned tools/three-way-setup.sh to start the server, then register the Editor via Window/MCP for Unity -> Connect."
+      "install_hint": "Run the provisioned tools/three-way-setup.sh to start the server, then register the Editor via Window/MCP for Unity -> Connect.",
+      "capabilities": [
+        "editor-automation",
+        "mcp"
+      ]
     },
     {
       "id": "ivanmurzak-mcp",
@@ -59,7 +71,11 @@
           }
         },
         "note": "The Unity plugin downloads and manages the server binary itself, so there is no separate server install. The port is derived per project (20000-29999) and can be pinned with MCP_PLUGIN_PORT. The documented client key is 'ai-game-developer'."
-      }
+      },
+      "capabilities": [
+        "editor-automation",
+        "mcp"
+      ]
     },
     {
       "id": "anklebreaker-mcp",
@@ -96,22 +112,11 @@
         "note": "Two separate pieces: install only one and you get a server connected to nothing. The health check probes the Unity-side bridge (127.0.0.1:7890/api/ping), which is what actually answers whether this is wired up. Licensed under a custom 'AnkleBreaker Open License v1.0', not a standard OSI licence."
       },
       "probe": "http",
-      "probe_reason": "The bridge exposes a plain liveness ping, not an MCP endpoint."
-    },
-    {
-      "id": "smithery-toolkit-mcp",
-      "name": "Smithery Unity Toolkit MCP",
-      "type": "mcp",
-      "mcp_server": "unity-editor-toolkit",
-      "tool_prefix": "mcp__smithery_toolkit__",
-      "probe": "unverified",
-      "probe_reason": "No project named 'unity-editor-toolkit' exists in the Smithery registry, on npm, or on GitHub, and port 9500 appears in no Unity MCP documentation.",
-      "install_hint": "unresolved - no matching upstream project could be found",
-      "install": {
-        "method": "unknown",
-        "docs_url": "https://registry.smithery.ai/servers?q=unity",
-        "note": "Smithery is an MCP registry, not a Unity vendor, so this entry is most likely a mislabel of some Smithery-distributed server. Checked and did NOT match: Arodoid/unitymcp, quazaai/unitymcpintegration, GrandMasterK414/unity-smithery-mcp, ozankasikci/unity-editor-mcp. Replace this entry with a real project or remove it."
-      }
+      "probe_reason": "The bridge exposes a plain liveness ping, not an MCP endpoint.",
+      "capabilities": [
+        "editor-automation",
+        "mcp"
+      ]
     },
     {
       "id": "realvirtual-mcp",
@@ -133,7 +138,12 @@
           "That same button writes the client config for you"
         ],
         "note": "The Python server is NOT pip- or uvx-installable; the in-Editor button is the only documented route. The client key differs between sources - the repo README says 'UnityMCP', which collides with coplay-mcp, so the docs site's 'realvirtual-unity' is used here."
-      }
+      },
+      "capabilities": [
+        "editor-automation",
+        "mcp",
+        "digital-twin"
+      ]
     },
     {
       "id": "akiojin-cli",
@@ -153,7 +163,11 @@
           "Verify with: unity-cli system ping"
         ],
         "note": "Installs an executable named 'unity-cli' - the same name akiojin-cli, youngwoo-cli and rage-cli all use. Only one of them can own that name on PATH. On Windows the install script fails outright: detect_rid() handles only Darwin and Linux and dies on Git Bash, despite a unity-cli-win-x64 release asset existing. Use that asset directly, or `cargo install --path .` from a clone. Connects to the Editor over TCP on port 6400."
-      }
+      },
+      "capabilities": [
+        "editor-automation",
+        "cli"
+      ]
     },
     {
       "id": "youngwoo-cli",
@@ -174,7 +188,11 @@
           "Add the Unity Connector package via the git URL below; it starts when Unity opens"
         ],
         "note": "Installs an executable named 'unity-cli' - the same name akiojin-cli, youngwoo-cli and rage-cli all use. Only one of them can own that name on PATH. The CLI checks its version against the Connector's and refuses on mismatch; bypass with --ignore-version-mismatch. The install URLs point at the 'master' branch while the repo default is 'main' - both resolve today."
-      }
+      },
+      "capabilities": [
+        "editor-automation",
+        "cli"
+      ]
     },
     {
       "id": "hatayama-loop",
@@ -194,7 +212,11 @@
           "Add the Unity package via the git URL below, or the OpenUPM scope io.github.hatayama.uloopmcp"
         ],
         "note": "Three different strings to keep straight: package 'uloop-cli', binary 'uloop', repo 'unity-cli-loop'. It was renamed from uLoopMCP at v1.0.0, so the OpenUPM scope and the npm homepage still carry the old name."
-      }
+      },
+      "capabilities": [
+        "editor-automation",
+        "cli"
+      ]
     },
     {
       "id": "rage-cli",
@@ -209,7 +231,12 @@
         "docs_url": "https://github.com/RageAgainstThePixel/unity-cli",
         "requires_editor": false,
         "note": "Installs an executable named 'unity-cli' - the same name akiojin-cli, youngwoo-cli and rage-cli all use. Only one of them can own that name on PATH. Different in kind from the other CLI arms: this is a Unity Hub/Editor/licence installer and runner for CI, not an Editor-automation bridge, so it needs no Unity package and no running Editor. package.json requires Node >= 24 (the README's 'v22.12+' is stale)."
-      }
+      },
+      "capabilities": [
+        "project-lifecycle",
+        "cli",
+        "ci"
+      ]
     }
   ],
   "trial_defaults": {

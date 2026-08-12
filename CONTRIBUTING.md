@@ -142,6 +142,36 @@ To add a new software domain (e.g., `postgres`, `docker`, `figma`):
    against an endpoint nobody could confirm manufactures a precise-sounding failure — "unreachable
    at 127.0.0.1:9500" reads as a server that is down, not as an entry we cannot substantiate.
 
+   **When two arms install the same binary name.** Three separate Unity CLI projects each install
+   an executable called `unity-cli`. Only one can own that name on PATH — but because all three
+   arms declare the identical `health_check`, installing *any* of them flips *all three* to READY.
+   Each row is individually correct and the set is a lie. `doctor` detects this and warns, but the
+   warning is a smoke alarm, not a fix.
+
+   The shipped preset keeps the bare name, because an absolute path is machine-specific and cannot
+   be shipped. To actually run the colliding arms side by side, install each one somewhere distinct
+   and point at it by absolute path **in your workspace `.agents/manifest.json`**:
+
+   ```json
+   {
+     "id": "akiojin-cli",
+     "command": "C:\\tools\\unity-arms\\akiojin\\unity-cli.exe",
+     "health_check": "\"C:\\tools\\unity-arms\\akiojin\\unity-cli.exe\" --version"
+   }
+   ```
+
+   Quote the path if it contains spaces — `health_check` is tokenised with `shlex(posix=False)`,
+   so `"C:\Program Files\..."` survives intact. Two things that do **not** work, both verified:
+   a workspace-relative path such as `.agents/bin/akiojin-cli` (cmd.exe reads the leading `/` as a
+   switch), and an extensionless shim on Windows (`shutil.which` needs a `PATHEXT` match). If you
+   want a shim directory, it needs real `.cmd` wrappers.
+
+   **Tag `capabilities` so unlike arms are not benchmarked against each other.** `rage-cli`
+   installs and launches Unity for CI; the other CLI arms drive an Editor that is already running.
+   Handing both the same task measures nothing — one of them cannot perform it at all — and the
+   scorecard reads as a defeat rather than a category error. `mcp-cocktail run --capability
+   editor-automation` restricts a trial to arms that can actually do the work.
+
 3. Create `src/mcp_cocktail/presets/<domain>/traps.json` with initial guardrail rules for that domain.
 4. Create `examples/<domain>/README.md` explaining setup and tool usage, plus whatever evidence
    (trial reports, research notes) backs the preset. That half stays in the repo and out of the wheel.

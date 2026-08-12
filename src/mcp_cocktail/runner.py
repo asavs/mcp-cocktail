@@ -97,11 +97,18 @@ def create_trial(
     exec_mode: str | None = None,
     scene_strategy: str | None = None,
     compare_visual: bool = False,
+    capability: str | None = None,
 ) -> dict[str, Any]:
     """Generate briefs for all targeted arms and prepare trial files."""
     trial_dir = setup_trial_directory(trial_id, config.root_dir)
 
-    target_arm_ids = arms_override or [a.id for a in config.arms]
+    # A trial across every arm in the manifest is not automatically a
+    # comparison. rage-cli installs and launches Unity for CI; the other CLI
+    # arms drive an Editor that is already running. Handing both the same task
+    # measures nothing -- one of them cannot perform it at all -- and the
+    # resulting scorecard reads as a defeat rather than a category error.
+    eligible = [a for a in config.arms if not capability or capability in a.capabilities]
+    target_arm_ids = arms_override or [a.id for a in eligible]
 
     if compare_visual or scene_strategy == "temp_scene":
         eff_strategy = "temp_scene"

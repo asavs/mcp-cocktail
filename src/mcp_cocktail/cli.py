@@ -402,11 +402,20 @@ def cmd_run(args: argparse.Namespace) -> int:
         exec_mode=args.exec,
         scene_strategy=args.scene_strategy,
         compare_visual=args.compare_visual,
+        capability=args.capability,
     )
     briefs = res["briefs"]
-    print(f"Created trial {args.trial_id} (Scene Isolation Strategy: {res['scene_strategy']}) with {len(briefs)} arm brief(s):")
+    scope = f" matching capability '{args.capability}'" if args.capability else ""
+    print(f"Created trial {args.trial_id} (Scene Isolation Strategy: {res['scene_strategy']}) "
+          f"with {len(briefs)} arm brief(s){scope}:")
     for arm_id in briefs:
         print(f"  - docs/trials/{args.trial_id}/brief-{arm_id}.md")
+
+    # An empty trial is a filter typo, not a finished run.
+    if not briefs:
+        known = sorted({c for a in config.arms for c in a.capabilities})
+        print(f"[WARN] No arm matched. Declared capabilities in this manifest: {', '.join(known) or '(none)'}")
+        return 1
     print(f"Task payload specification generated: {res['tasks_file']}")
     return 0
 
@@ -513,6 +522,11 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("trial_id", help="Trial identifier (e.g. T-001)")
     p_run.add_argument("task", help="Task description for trial")
     p_run.add_argument("--arms", nargs="*", help="Specific arm IDs to target")
+    p_run.add_argument(
+        "--capability",
+        help="Only include arms declaring this capability (e.g. editor-automation). "
+             "Arms that cannot perform the task are a category error, not a losing result.",
+    )
     p_run.add_argument("--exec", choices=["auto", "omp", "claude"], help="Prepare execution task payload for subagents")
     p_run.add_argument("--scene-strategy", choices=["auto", "instant_reload", "temp_scene"], default="auto", help="Scene isolation strategy")
     p_run.add_argument("--compare-visual", action="store_true", help="Shortcut to force temp_scene mode for human visual inspection")
