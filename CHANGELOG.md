@@ -3,6 +3,18 @@
 All notable changes to mcp-cocktail are recorded here. Versions follow Semantic Versioning;
 release-candidate suffixes use Python's PEP 440 spelling in package metadata.
 
+## 0.4.0 — 2026-08-12
+
+First stable release of Cocktail's harness-neutral orchestration core. This promotes RC3 after
+an independent cold-start acceptance run against Unity 6000.5.5f1 passed every safety-critical
+gate: exact-project operational health, exclusive mutation leases, wrong-token rejection,
+honest failure and circuit handling, durable stale recovery, workspace-delta accuracy, and
+preservation of unrelated Editors and project files.
+
+Cocktail plans multi-arm work and enforces the shared lifecycle and evidence contract; external
+harnesses still own agent launching and cancellation. Harness-specific process provisioning and
+genuinely isolated worktrees or Editor instances remain explicitly future work.
+
 ## 0.4.0rc3 — 2026-08-12
 
 Focused follow-up to the independent RC2 lifecycle and live-Unity acceptance pass.
