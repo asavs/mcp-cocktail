@@ -96,3 +96,31 @@ def test_journal_failure_leaves_retryable_outbox(tmp_path: Path):
 
     assert lifecycle.inspect()["state"]["journal_pending"] == []
     lifecycle.release("adapter", holder["token"])
+
+
+def test_repeated_failures_each_reach_durable_journal_and_open_circuit(tmp_path: Path):
+    lifecycle = planned(tmp_path)
+    holder = lifecycle.acquire("adapter")
+
+    for attempt in (1, 2):
+        lifecycle.begin("arm-coplay", "coplay", "adapter", holder["token"])
+        result = lifecycle.finish(
+            "arm-coplay", "coplay", "adapter", holder["token"], "failed",
+            error=f"target rejected attempt {attempt}",
+        )
+
+    circuit = result["state"]["circuits"]["coplay:editor-automation"]
+    assert circuit["state"] == "open"
+    assert circuit["consecutive_failures"] == 2
+    observations = json.loads(
+        (tmp_path / ".agents" / "health-observations.json").read_text("utf-8")
+    )["observations"]
+    failures = [item for item in observations if item["outcome"] == "failed"]
+    assert len(failures) == 2
+    assert [item["detail"] for item in failures] == [
+        "target rejected attempt 1", "target rejected attempt 2",
+    ]
+
+    with pytest.raises(ValueError, match="Circuit is open"):
+        lifecycle.begin("arm-coplay", "coplay", "adapter", holder["token"])
+    lifecycle.release("adapter", holder["token"])

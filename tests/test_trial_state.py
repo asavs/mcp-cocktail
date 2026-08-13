@@ -213,6 +213,18 @@ def test_stale_recovery_requires_token_and_expiry_and_is_durably_audited(tmp_pat
     assert audit == [evidence]
 
 
+def test_attach_distinguishes_missing_lease_from_wrong_token(tmp_path: Path):
+    with pytest.raises(LeaseBusyError, match="no longer exists"):
+        MutationLease.attach(tmp_path, "operator", "missing-token")
+
+    held = MutationLease(tmp_path, "owner").acquire()
+    try:
+        with pytest.raises(LeaseBusyError, match="token does not match"):
+            MutationLease.attach(tmp_path, "operator", "wrong-token")
+    finally:
+        held.release()
+
+
 def test_renewal_winning_guard_prevents_stale_recovery_race(tmp_path: Path):
     with patch("mcp_cocktail.trial_state.time.time", return_value=100.0):
         lease = MutationLease(tmp_path, "arm-a", trial_id="T-1", ttl_seconds=10).acquire()

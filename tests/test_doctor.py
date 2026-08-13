@@ -991,6 +991,21 @@ def test_unity_preset_declares_a_binding_for_project_scoped_arms():
     for arm_id in ("official-unity-cli", "official-unity-mcp"):
         assert arms[arm_id].binding_path == "data.instances[].project"
     assert arms["coplay-mcp"].target_check["name"] == "read_console"
+    assert arms["coplay-mcp"].target_check["proves_capabilities"] == ["editor-automation"]
+
+
+def test_execution_reported_has_an_honest_status_label(capsys):
+    config = CocktailConfig(name="x", description="", arms=[])
+    result = ArmHealthResult(
+        "coplay", "Coplay", "EXECUTION_REPORTED",
+        "Capability succeeded (reported by an execution adapter).", {},
+    )
+
+    print_doctor_report([result], config)
+
+    output = capsys.readouterr().out
+    assert "[EXECUTION REPORTED]" in output
+    assert "[OFFLINE]" not in output
 
 
 def test_unreachable_arm_with_a_missing_setup_script_is_unconfigured(tmp_path):

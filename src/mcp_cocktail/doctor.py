@@ -1377,6 +1377,27 @@ def capability_health_results(
                 {"capability": capability, "base_status": base_status, "observation": observation},
             ))
             continue
+        # A target check is a live, project-bound operation performed by this
+        # very doctor invocation.  Let the manifest state exactly which
+        # capabilities that operation proves; do not infer every declared
+        # capability merely because one target call answered.  This keeps the
+        # capability gate useful without turning `read_console` into evidence
+        # that, for example, an arm can run EditMode tests.
+        live_probe_capabilities = arm.target_check.get("proves_capabilities", [])
+        if isinstance(live_probe_capabilities, str):
+            live_probe_capabilities = [live_probe_capabilities]
+        if base_result.status == "OPERATIONAL" and capability in live_probe_capabilities:
+            derived.append(ArmHealthResult(
+                arm.id, arm.name, "OPERATIONAL",
+                f"Capability '{capability}' is proven by the current live target probe.",
+                {
+                    "capability": capability,
+                    "base_status": base_result.status,
+                    "proof": "current_live_target_probe",
+                    "probe": base_result.details,
+                },
+            ))
+            continue
         if not observation:
             derived.append(ArmHealthResult(
                 arm.id, arm.name, "CAPABILITY_UNKNOWN",
@@ -1502,6 +1523,7 @@ def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) 
         "DEGRADED": "[DEGRADED]",
         "AMBIGUOUS_IDENTITY": "[AMBIGUOUS IDENTITY]",
         "CAPABILITY_UNKNOWN": "[CAPABILITY UNKNOWN]",
+        "EXECUTION_REPORTED": "[EXECUTION REPORTED]",
         "ASSUMED_READY": "[LEGACY ASSUMED]",
         "NOT_RUNNING": "[NOT_RUNNING]",
         "INSTALLED_ONLY": "[INSTALLED?]",

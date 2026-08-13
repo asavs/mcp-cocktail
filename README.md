@@ -179,11 +179,16 @@ fail merely because some arm is down. To assert on the arms you actually depend 
 
 ```bash
 mcp-cocktail doctor --require official-unity-cli --require official-unity-mcp
-mcp-cocktail doctor --capability editmode-tests --require coplay-mcp:editmode-tests
+mcp-cocktail doctor --capability editor-automation --require coplay-mcp:editor-automation
 ```
 
 Exits `1` if a required arm is not READY, `2` if a requirement names an unknown arm or the
 workspace has no manifest at all.
+
+A live target probe only proves capabilities explicitly named by that probe's
+`proves_capabilities` manifest field. Successful external-adapter evidence is shown as
+`EXECUTION_REPORTED`; it remains useful provenance but does not independently satisfy a READY
+gate.
 
 ### 3. Native MCP Server Interface (`mcp-cocktail serve`) & Transparent Proxy (`mcp-cocktail proxy`)
 Mount `mcp-cocktail` directly into your agent's MCP config (`.claude/settings.json` or `mcp.json`) to expose native tools or wrap target MCP servers:

@@ -597,7 +597,11 @@ class MutationLease:
             try:
                 holder = lease._require_token_unlocked(token)
             except LeaseOwnershipError as exc:
-                raise LeaseBusyError("Lease token does not match the current holder") from exc
+                # Preserve the distinction between a crashed/missing lease and
+                # a live lease owned by somebody else.  Both remain hard
+                # failures, but operators need the actual reason to recover
+                # safely instead of debugging a fictitious token mismatch.
+                raise LeaseBusyError(str(exc)) from exc
             if holder.get("owner") != owner:
                 raise LeaseBusyError("Lease belongs to a different owner")
             if trial_id is not None and holder.get("trial_id") != trial_id:

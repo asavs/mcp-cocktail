@@ -122,7 +122,10 @@
           ]
         },
         "timeout_seconds": 5,
-        "reject_match": "no[_ -]?unity[_ -]?session|unity ping.*not answered|timed? out"
+        "reject_match": "no[_ -]?unity[_ -]?session|unity ping.*not answered|timed? out",
+        "proves_capabilities": [
+          "editor-automation"
+        ]
       },
       "install_hint": "Run the provisioned tools/three-way-setup.sh to start the server, then register the Editor via Window/MCP for Unity -> Connect.",
       "install": {

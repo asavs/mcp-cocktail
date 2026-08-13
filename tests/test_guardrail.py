@@ -178,6 +178,32 @@ def test_scene_hierarchy_rule_targets_only_that_tool():
     assert not any("290,642" in m for m in other)
 
 
+def test_coplay_bridge_start_blocking_patterns_trip_deadlock_guardrail():
+    traps = _unity_preset_traps()
+    dangerous = [
+        "unity command eval --code 'MCPServiceLocator.Bridge.StartAsync().GetAwaiter().GetResult();'",
+        "unity command eval --code 'MCPServiceLocator.Bridge.StartAsync().Wait();'",
+        "unity command eval --code 'var result = MCPServiceLocator.Bridge.StartAsync().Result;'",
+        "unity command eval --code 'await MCPServiceLocator.Bridge.StartAsync();'",
+    ]
+
+    for index, command in enumerate(dangerous):
+        hits = evaluate_rules("Bash", {"command": command}, traps, {}, 1000.0 + index)
+        assert any("deadlock" in message.lower() for message in hits), command
+
+
+def test_coplay_bridge_start_fire_and_forget_is_not_blocked():
+    traps = _unity_preset_traps()
+    safe = (
+        "unity command eval --code "
+        "'var _ = MCPForUnity.Editor.Services.MCPServiceLocator.Bridge.StartAsync(); "
+        "return \"dispatched\";'"
+    )
+
+    hits = evaluate_rules("Bash", {"command": safe}, traps, {}, 1000.0)
+    assert not any("deadlock" in message.lower() for message in hits)
+
+
 def test_guardrail_selftest():
     # Repo root resolves the shipped rule store, so the engine test and the
     # deployment report both pass.

@@ -140,6 +140,34 @@ def test_cli_capability_requirement_cannot_override_current_offline_arm(
     assert "--require coplay:tests: OFFLINE" in output
 
 
+def test_cli_capability_requirement_accepts_explicit_current_live_probe(
+    tmp_path: Path, monkeypatch, capsys
+):
+    monkeypatch.chdir(tmp_path)
+    _write_manifest(tmp_path, [{
+        "id": "coplay", "name": "Coplay", "type": "mcp",
+        "capabilities": ["editor-automation", "editmode-tests"],
+        "target_check": {
+            "kind": "mcp_tool", "name": "read_console",
+            "proves_capabilities": ["editor-automation"],
+        },
+    }])
+    operational = [ArmHealthResult(
+        "coplay", "Coplay", "OPERATIONAL", "live read_console completed", {}
+    )]
+
+    with patch("mcp_cocktail.cli.run_doctor", return_value=operational):
+        assert main([
+            "doctor", "--capability", "editor-automation",
+            "--require", "coplay:editor-automation",
+        ]) == 0
+        assert main(["doctor", "--require", "coplay:editmode-tests"]) == 1
+
+    output = capsys.readouterr().out
+    assert "current live target probe" in output
+    assert "--require coplay:editmode-tests: CAPABILITY_UNKNOWN" in output
+
+
 def test_cli_doctor_require_unknown_arm_cannot_be_evaluated(tmp_path: Path, monkeypatch, capsys):
     """A typo must not read as a satisfied requirement."""
     monkeypatch.chdir(tmp_path)

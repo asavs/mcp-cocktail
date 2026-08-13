@@ -136,6 +136,39 @@ def test_capability_only_becomes_operational_from_independent_doctor_probe(tmp_p
     assert capability_health_results(config, base, "tests", now=now)[0].status == "OPERATIONAL"
 
 
+def test_current_live_probe_proves_only_manifest_scoped_capabilities(tmp_path):
+    arm = ArmConfig(
+        id="coplay", name="Coplay", type="mcp",
+        capabilities=["editor-automation", "editmode-tests"],
+        target_check={
+            "kind": "mcp_tool", "name": "read_console",
+            "proves_capabilities": ["editor-automation"],
+        },
+    )
+    config = CocktailConfig(name="unity", description="", root_dir=tmp_path, arms=[arm])
+    live = [ArmHealthResult("coplay", "Coplay", "OPERATIONAL", "read_console answered", {
+        "tool": "read_console", "project_root": str(tmp_path),
+    })]
+
+    editor = capability_health_results(config, live, "editor-automation")[0]
+    tests = capability_health_results(config, live, "editmode-tests")[0]
+
+    assert editor.status == "OPERATIONAL"
+    assert editor.details["proof"] == "current_live_target_probe"
+    assert tests.status == "CAPABILITY_UNKNOWN"
+
+
+def test_live_probe_capability_metadata_accepts_single_string(tmp_path):
+    arm = ArmConfig(
+        id="arm", name="Arm", type="mcp", capabilities=["editor-read"],
+        target_check={"proves_capabilities": "editor-read"},
+    )
+    config = CocktailConfig(name="x", description="", root_dir=tmp_path, arms=[arm])
+    base = [ArmHealthResult("arm", "Arm", "OPERATIONAL", "target answered", {})]
+
+    assert capability_health_results(config, base, "editor-read")[0].status == "OPERATIONAL"
+
+
 def test_future_capability_evidence_does_not_earn_operational(tmp_path):
     config = CocktailConfig(
         name="unity", description="", root_dir=tmp_path,

@@ -3,6 +3,20 @@
 All notable changes to mcp-cocktail are recorded here. Versions follow Semantic Versioning;
 release-candidate suffixes use Python's PEP 440 spelling in package metadata.
 
+## 0.4.0rc3 — 2026-08-12
+
+Focused follow-up to the independent RC2 lifecycle and live-Unity acceptance pass.
+
+- Capability-scoped Doctor requirements can now reuse a successful target probe from the same
+  invocation, but only for capabilities the manifest explicitly says that probe proves. Coplay's
+  project-bound `read_console` probe proves `editor-automation`; it does not imply test execution.
+- Adapter-reported success renders as `[EXECUTION REPORTED]` instead of falling through to the
+  misleading `[OFFLINE]` fallback, and still does not satisfy a READY requirement.
+- The Unity guardrail preset now catches blocking or awaiting Coplay's `Bridge.StartAsync()` from
+  `unity command eval`, a main-thread deadlock recoverable only by terminating the Editor.
+- Lifecycle attachment errors preserve whether the lease disappeared or a live holder has a
+  different token, while rejecting both cases.
+
 ## 0.4.0rc2 — 2026-08-12
 
 Acceptance follow-up after a concurrent Unity project exposed Coplay's fixed-port collision risk.
