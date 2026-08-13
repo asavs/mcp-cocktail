@@ -13,7 +13,7 @@ from typing import Any
 class ArmConfig:
     id: str
     name: str
-    type: str  # "cli", "mcp", "api", etc.
+    type: str  # "cli", "mcp", "api", "gui", etc.
     command: str | None = None
     mcp_server: str | None = None
     tool_prefix: str | None = None
@@ -69,6 +69,15 @@ class ArmConfig:
     # first real call failed because the editor-side half was missing.
     capability_check: str | None = None
     health_check: str | None = None
+    # Evidence layer proven by a successful health_check. Shell commands are
+    # transport-only unless a manifest explicitly declares target_operation.
+    health_check_layer: str = "transport"
+    # A bounded read-only operation that must cross the transport into the
+    # target application before an arm can be called operational.  Currently
+    # supported: {"kind": "mcp_tool", "name": "read_console",
+    # "arguments": {...}, "timeout_seconds": 5}.  An MCP initialize proves
+    # the server is present; this proves the Editor behind it can answer.
+    target_check: dict[str, Any] = field(default_factory=dict)
     # Dotted path into the health check's JSON stdout naming the project each
     # live instance is serving, e.g. "data.instances[].project". Lets doctor
     # distinguish "bound" from "bound to *this* workspace".
@@ -81,7 +90,7 @@ class ArmConfig:
             "id", "name", "type", "command", "mcp_server",
             "tool_prefix", "description", "capabilities", "env",
             "setup_script", "install_hint", "install", "probe", "probe_reason", "discovery", "requires", "binary_group", "capability_check",
-            "health_check", "binding_path"
+            "health_check", "health_check_layer", "target_check", "binding_path"
         }
         extra = {k: v for k, v in data.items() if k not in known}
         caps = data.get("capabilities", [])
@@ -108,6 +117,8 @@ class ArmConfig:
             binary_group=data.get("binary_group"),
             capability_check=data.get("capability_check"),
             health_check=data.get("health_check"),
+            health_check_layer=data.get("health_check_layer", "transport"),
+            target_check=data.get("target_check") or {},
             binding_path=data.get("binding_path"),
             extra=extra,
         )

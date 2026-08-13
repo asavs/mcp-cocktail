@@ -7,6 +7,7 @@ import json
 import shutil
 import sys
 from pathlib import Path
+from typing import Any
 
 from mcp_cocktail import __version__
 from mcp_cocktail.acquire import install_plan_data, render_install_plan
@@ -20,6 +21,8 @@ from mcp_cocktail.discover import (
 )
 from mcp_cocktail.doctor import (
     READY_STATUSES,
+    capability_health_results,
+    doctor_check_arm,
     evaluate_requirements,
     missing_setup_script,
     print_doctor_report,
@@ -35,10 +38,12 @@ from mcp_cocktail.installer import (
     provision_tree,
     uninstall_hook,
 )
+from mcp_cocktail.lifecycle import LifecycleError, TrialLifecycle
+from mcp_cocktail.trial_state import LeaseBusyError, LeaseNotExpiredError, LeaseOwnershipError
 from mcp_cocktail.preflight import print_preflight_report, run_preflight
 from mcp_cocktail.miner import cmd_sweep, print_sweep_report, summarize_transcript, parse_blocks
 from mcp_cocktail.proxy import run_proxy
-from mcp_cocktail.runner import create_trial
+from mcp_cocktail.runner import TrialPlanError, create_trial
 from mcp_cocktail.scorecard import generate_scorecard, propose_rsi_guardrails, generate_upstream_bug_draft
 from mcp_cocktail.server import run_mcp_server
 from mcp_cocktail.sync import pull_domain_rules, push_domain_contributions
@@ -231,9 +236,45 @@ def cmd_install(args: argparse.Namespace) -> int:
         print("No arms defined. Run `mcp-cocktail setup --preset <domain>` first.")
         return 2
 
+    selected = set(args.arms or [arm.id for arm in config.arms])
+    coplay_result = None
+    if "coplay-mcp" in selected:
+        coplay = next((arm for arm in config.arms if arm.id == "coplay-mcp"), None)
+        if coplay is not None:
+            coplay_result = doctor_check_arm(coplay, config.root_dir)
+
+    unsafe_occupied = {
+        "WRONG_PROJECT", "DEGRADED", "TRANSPORT_ONLY", "TARGET_ONLY",
+        "SOCKET_BOUND_ONLY", "BOUND_ELSEWHERE",
+    }
+    blocked = coplay_result is not None and coplay_result.status in unsafe_occupied
+
     if args.json:
-        print(json.dumps(install_plan_data(config, args.arms), indent=2))
-        return 0
+        if blocked:
+            data = {"domain": config.name, "arms": [], "blocked": {
+                "reason": "fixed-port-collision",
+                "status": coplay_result.status,
+                "message": coplay_result.message,
+                "action": "Do not add or start Coplay until the existing port-8080 owner is deliberately stopped or moved.",
+            }}
+        else:
+            data = install_plan_data(config, args.arms)
+        print(json.dumps(data, indent=2))
+        return 1 if blocked else 0
+
+    if coplay_result is not None:
+        if blocked:
+            print("\n[BLOCKED: FIXED-PORT COLLISION]")
+            print(coplay_result.message)
+            print("Do not add/start the Coplay package in this Editor until the existing")
+            print("port-8080 owner is deliberately stopped or moved; package auto-start can")
+            print("displace another project's bridge. Cocktail will not execute install steps.")
+            return 1
+        if coplay_result.status in READY_STATUSES:
+            print("\n[ALREADY OPERATIONAL]")
+            print("Coplay already proves a target operation against this exact project;")
+            print("there is no install action to perform.")
+            return 0
 
     text, unknown = render_install_plan(config, args.arms)
     print(text)
@@ -303,26 +344,48 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     config = CocktailConfig.load(Path.cwd())
     doc_results = run_doctor(config)
     print_doctor_report(doc_results, config)
+    capability_cache: dict[str, list[Any]] = {}
+    if args.capability:
+        scoped = capability_health_results(config, doc_results, args.capability)
+        capability_cache[args.capability] = scoped
+        print(f"\nCapability evidence: {args.capability}")
+        print_doctor_report(scoped, config)
 
-    # Non-zero so `mcp-cocktail doctor && <proceed>` cannot sail through an
-    # unconfigured workspace.
     if not doc_results:
         return 2
 
-    unmet, unknown = evaluate_requirements(doc_results, args.require or [])
+    requirements = args.require or []
+    unmet, unknown = evaluate_requirements(
+        doc_results, [item for item in requirements if ":" not in item]
+    )
+    scoped_unmet: list[tuple[str, Any]] = []
+    for requirement in (item for item in requirements if ":" in item):
+        arm_id, required_capability = requirement.split(":", 1)
+        if not arm_id or not required_capability:
+            unknown.append(requirement)
+            continue
+        scoped = capability_cache.setdefault(
+            required_capability,
+            capability_health_results(config, doc_results, required_capability),
+        )
+        result = next((item for item in scoped if item.arm_id == arm_id), None)
+        if result is None:
+            unknown.append(requirement)
+        elif result.status not in READY_STATUSES:
+            scoped_unmet.append((requirement, result))
 
     for arm_id in unknown:
         known = ", ".join(r.arm_id for r in doc_results)
-        print(f"\n[ERROR] --require {arm_id}: no such arm in this manifest. Known arms: {known}")
-
+        print(f"\n[ERROR] --require {arm_id}: no such arm/capability can be evaluated. Known arms: {known}")
     for result in unmet:
         print(f"\n[ERROR] --require {result.arm_id}: {result.status} — {result.message}")
+    for requirement, result in scoped_unmet:
+        print(f"\n[ERROR] --require {requirement}: {result.status} — {result.message}")
 
     if unknown:
-        return 2  # cannot evaluate the requirement
-    if unmet:
-        return 1  # evaluated, and not met
-
+        return 2
+    if unmet or scoped_unmet:
+        return 1
     return 0
 
 
@@ -410,19 +473,29 @@ def cmd_run(args: argparse.Namespace) -> int:
     if not config.arms:
         print("Warning: No arms defined in manifest.")
 
-    res = create_trial(
-        trial_id=args.trial_id,
-        task_description=args.task,
-        config=config,
-        arms_override=args.arms,
-        exec_mode=args.exec,
-        scene_strategy=args.scene_strategy,
-        compare_visual=args.compare_visual,
-        capability=args.capability,
-    )
+    if args.exec:
+        print("Error: --exec is unavailable. Cocktail has no agent executor; previous versions only recorded this value.")
+        print("Use 'mcp-cocktail plan ...' to generate briefs, then give trial-tasks.json to an external harness.")
+        return 2
+
+    try:
+        res = create_trial(
+            trial_id=args.trial_id,
+            task_description=args.task,
+            config=config,
+            arms_override=args.arms,
+            scene_strategy=args.scene_strategy,
+            compare_visual=args.compare_visual,
+            capability=args.capability,
+        )
+    except TrialPlanError as exc:
+        print(f"Error: {exc}")
+        return 2
     briefs = res["briefs"]
     scope = f" matching capability '{args.capability}'" if args.capability else ""
-    print(f"Created trial {args.trial_id} (Scene Isolation Strategy: {res['scene_strategy']}) "
+    if args.command == "run":
+        print("Note: 'run' is a backward-compatible planning alias; it does not execute agents.")
+    print(f"Planned trial {args.trial_id} (requested scene strategy: {res['scene_strategy']}) "
           f"with {len(briefs)} arm brief(s){scope}:")
     for arm_id in briefs:
         print(f"  - docs/trials/{args.trial_id}/brief-{arm_id}.md")
@@ -432,8 +505,58 @@ def cmd_run(args: argparse.Namespace) -> int:
         known = sorted({c for a in config.arms for c in a.capabilities})
         print(f"[WARN] No arm matched. Declared capabilities in this manifest: {', '.join(known) or '(none)'}")
         return 1
-    print(f"Task payload specification generated: {res['tasks_file']}")
+    print(f"Task payload specification generated (not executed): {res['tasks_file']}")
     return 0
+
+
+def cmd_trial(args: argparse.Namespace) -> int:
+    """Machine-readable lifecycle boundary for external harness adapters."""
+    try:
+        required_by_action = {
+            "acquire": ("owner",),
+            "renew": ("owner", "token"),
+            "recover": ("owner", "token"),
+            "release": ("owner", "token"),
+            "begin": ("stage", "arm", "owner", "token"),
+            "finish": ("stage", "arm", "owner", "token", "outcome"),
+        }
+        missing = [name for name in required_by_action.get(args.action, ())
+                   if not getattr(args, name, None)]
+        if missing:
+            raise LifecycleError(
+                f"Action {args.action!r} requires: {', '.join('--' + name for name in missing)}"
+            )
+        lifecycle = TrialLifecycle(Path.cwd(), args.trial_id)
+        if args.action == "status":
+            result: Any = lifecycle.inspect()
+        elif args.action == "acquire":
+            result = lifecycle.acquire(args.owner, args.ttl)
+        elif args.action == "renew":
+            result = lifecycle.renew(args.owner, args.token)
+        elif args.action == "recover":
+            result = lifecycle.recover(args.token, args.owner)
+        elif args.action == "release":
+            lifecycle.release(args.owner, args.token)
+            result = {"released": True}
+        elif args.action == "begin":
+            result = lifecycle.begin(args.stage, args.arm, args.owner, args.token)
+        elif args.action == "finish":
+            evidence = [json.loads(item) for item in args.evidence]
+            artifacts = [json.loads(item) for item in args.artifact]
+            result = lifecycle.finish(
+                args.stage, args.arm, args.owner, args.token, args.outcome,
+                error=args.error, evidence=evidence, artifacts=artifacts,
+            )
+        else:  # argparse constrains this
+            raise LifecycleError(f"Unknown lifecycle action: {args.action}")
+        print(json.dumps({"ok": True, "result": result}, indent=2, default=str))
+        return 0
+    except (
+        LifecycleError, LeaseBusyError, LeaseOwnershipError, LeaseNotExpiredError,
+        ValueError, KeyError, OSError, json.JSONDecodeError,
+    ) as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}))
+        return 2
 
 
 def cmd_scorecard(args: argparse.Namespace) -> int:
@@ -500,6 +623,10 @@ def main(argv: list[str] | None = None) -> int:
         metavar="ARM_ID",
         help="Exit non-zero unless this arm is READY. Repeatable. Without it, doctor reports and exits 0.",
     )
+    p_doctor.add_argument(
+        "--capability",
+        help="Show fresh target-operation evidence for one declared capability",
+    )
 
     p_check = subparsers.add_parser("check", help="Run PreToolUse trap guardrail check")
     p_check.add_argument("--traps", help="Path to traps.json")
@@ -537,18 +664,40 @@ def main(argv: list[str] | None = None) -> int:
     p_mine.add_argument("target", nargs="?", help="Target file or UUID for stats")
     p_mine.add_argument("--project", help="Filter by project slug")
 
-    p_run = subparsers.add_parser("run", help="Generate subagent trial briefs for multi-arm benchmark")
-    p_run.add_argument("trial_id", help="Trial identifier (e.g. T-001)")
-    p_run.add_argument("task", help="Task description for trial")
-    p_run.add_argument("--arms", nargs="*", help="Specific arm IDs to target")
-    p_run.add_argument(
-        "--capability",
-        help="Only include arms declaring this capability (e.g. editor-automation). "
-             "Arms that cannot perform the task are a category error, not a losing result.",
-    )
-    p_run.add_argument("--exec", choices=["auto", "omp", "claude"], help="Prepare execution task payload for subagents")
-    p_run.add_argument("--scene-strategy", choices=["auto", "instant_reload", "temp_scene"], default="auto", help="Scene isolation strategy")
-    p_run.add_argument("--compare-visual", action="store_true", help="Shortcut to force temp_scene mode for human visual inspection")
+    def add_plan_arguments(command_parser: argparse.ArgumentParser) -> None:
+        command_parser.add_argument("trial_id", help="Trial identifier (e.g. T-001)")
+        command_parser.add_argument("task", help="Task description for trial")
+        command_parser.add_argument("--arms", nargs="*", help="Specific arm IDs to target")
+        command_parser.add_argument(
+            "--capability",
+            help="Only include arms declaring this capability (e.g. editor-automation). "
+                 "Arms that cannot perform the task are a category error, not a losing result.",
+        )
+        command_parser.add_argument(
+            "--exec",
+            choices=["auto", "omp", "claude"],
+            help="Unsupported compatibility option; fails because Cocktail has no agent executor",
+        )
+        command_parser.add_argument("--scene-strategy", choices=["auto", "instant_reload", "temp_scene"], default="auto", help="Requested scene isolation strategy for the external harness")
+        command_parser.add_argument("--compare-visual", action="store_true", help="Plan per-arm temporary scenes for human visual inspection")
+
+    p_plan = subparsers.add_parser("plan", help="Generate trial briefs and payloads without executing agents")
+    add_plan_arguments(p_plan)
+    p_run = subparsers.add_parser("run", help="Backward-compatible alias for 'plan' (does not execute agents)")
+    add_plan_arguments(p_run)
+
+    p_trial = subparsers.add_parser("trial", help="Drive a planned trial through the harness-neutral lifecycle")
+    p_trial.add_argument("action", choices=["status", "acquire", "renew", "recover", "release", "begin", "finish"])
+    p_trial.add_argument("trial_id")
+    p_trial.add_argument("--owner", default="external-harness")
+    p_trial.add_argument("--token")
+    p_trial.add_argument("--ttl", type=int, default=600)
+    p_trial.add_argument("--stage")
+    p_trial.add_argument("--arm")
+    p_trial.add_argument("--outcome", choices=["succeeded", "partial", "failed", "skipped"])
+    p_trial.add_argument("--error")
+    p_trial.add_argument("--evidence", action="append", default=[], help="JSON Evidence object; repeatable")
+    p_trial.add_argument("--artifact", action="append", default=[], help="JSON Artifact object; repeatable")
 
     p_score = subparsers.add_parser("scorecard", help="Generate comparative scorecard & RSI insights")
     p_score.add_argument("--rsi", action="store_true", help="Extract proposed trap rules from inbox")
@@ -579,6 +728,8 @@ def main(argv: list[str] | None = None) -> int:
         "upstream": cmd_upstream,
         "mine": cmd_mine,
         "run": cmd_run,
+        "plan": cmd_run,
+        "trial": cmd_trial,
         "scorecard": cmd_scorecard,
     }.get(args.command)
 

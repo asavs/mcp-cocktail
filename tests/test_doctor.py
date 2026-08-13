@@ -8,6 +8,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from mcp_cocktail.config import CocktailConfig, ArmConfig
 from mcp_cocktail.doctor import (
@@ -29,9 +30,11 @@ from mcp_cocktail.doctor import (
     run_doctor,
     probe_cli_arm,
     probe_mcp_arm,
+    probe_mcp_target,
     resolve_probe_binary,
     shared_probe_binaries,
     summarize_failure,
+    _decode_jsonrpc_body,
 )
 from mcp_cocktail.installer import PRESETS_DIR
 
@@ -40,6 +43,127 @@ def test_probe_cli_arm_offline():
     arm = ArmConfig(id="nonexistent-cli", name="Fake CLI", type="cli", command="nonexistent_binary_xyz_123")
     res = probe_cli_arm(arm)
     assert res.status == "OFFLINE"
+
+
+def test_stdio_mcp_probe_is_bounded_and_reaps_hung_process():
+    proc = MagicMock()
+    proc.stdin.closed = False
+    proc.stdout.readline.side_effect = lambda: threading.Event().wait(30)
+    proc.poll.return_value = None
+
+    arm = ArmConfig(id="hung", name="Hung", type="mcp", mcp_server="hung-mcp")
+    with patch("mcp_cocktail.doctor.shutil.which", return_value="C:/hung.exe"), \
+            patch("mcp_cocktail.doctor.subprocess.Popen", return_value=proc):
+        result = probe_mcp_arm(arm)
+
+    assert result.status == "DEGRADED"
+    assert result.details["timeout"] is True
+    proc.terminate.assert_called_once()
+    proc.wait.assert_called()
+
+
+def test_sse_decoder_ignores_progress_notifications_before_matching_response():
+    body = "\n".join([
+        'data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1}}',
+        "",
+        'data: {"jsonrpc":"2.0","id":2,"result":{"content":[]}}',
+        "",
+    ])
+
+    assert _decode_jsonrpc_body(body, expected_id=2)["id"] == 2
+    assert _decode_jsonrpc_body(body, expected_id=99) is None
+
+
+def test_target_probe_rejects_success_envelope_containing_known_failure_signal():
+    replies = [
+        ({"jsonrpc": "2.0", "id": 1, "result": {}}, "session", ""),
+        ({
+            "jsonrpc": "2.0", "id": 2,
+            "result": {"content": [{"type": "text", "text": "no_unity_session"}]},
+        }, "session", ""),
+    ]
+    spec = {
+        "kind": "mcp_tool", "name": "read_console", "arguments": {},
+        "reject_match": "no[_ -]?unity[_ -]?session",
+    }
+
+    with patch("mcp_cocktail.doctor._post_mcp_jsonrpc", side_effect=replies), \
+            patch("mcp_cocktail.doctor.urllib.request.urlopen"):
+        operational, detail, _ = probe_mcp_target("http://localhost/mcp", spec)
+
+    assert operational is False
+    assert "failure signal" in detail
+
+
+def test_target_probe_requires_identity_resource_to_name_workspace(tmp_path):
+    replies = [
+        ({"jsonrpc": "2.0", "id": 1, "result": {}}, "session", ""),
+        ({"jsonrpc": "2.0", "id": 2, "result": {
+            "contents": [{"text": '{"data":{"projectRoot":"C:/elsewhere"}}'}]
+        }}, "session", ""),
+    ]
+    spec = {
+        "kind": "mcp_tool", "name": "read_console", "arguments": {},
+        "identity_resource": "mcpforunity://project/info",
+    }
+
+    with patch("mcp_cocktail.doctor._post_mcp_jsonrpc", side_effect=replies), \
+            patch("mcp_cocktail.doctor.urllib.request.urlopen"):
+        operational, detail, _ = probe_mcp_target(
+            "http://localhost/mcp", spec, tmp_path
+        )
+
+    assert operational is False
+    assert "did not name this workspace" in detail
+
+
+def test_target_probe_accepts_exact_nested_project_root(tmp_path):
+    project_info = json.dumps({"data": {"projectRoot": str(tmp_path)}})
+    replies = [
+        ({"jsonrpc": "2.0", "id": 1, "result": {}}, "session", ""),
+        ({"jsonrpc": "2.0", "id": 2, "result": {
+            "contents": [{"text": project_info}]
+        }}, "session", ""),
+        ({"jsonrpc": "2.0", "id": 3, "result": {"content": []}}, "session", ""),
+    ]
+    spec = {
+        "kind": "mcp_tool", "name": "read_console", "arguments": {},
+        "identity_resource": "mcpforunity://project/info",
+    }
+
+    with patch("mcp_cocktail.doctor._post_mcp_jsonrpc", side_effect=replies), \
+            patch("mcp_cocktail.doctor.urllib.request.urlopen"):
+        operational, _, _ = probe_mcp_target(
+            "http://localhost/mcp", spec, tmp_path
+        )
+
+    assert operational is True
+
+
+def test_target_probe_uses_one_end_to_end_deadline(tmp_path):
+    project_info = json.dumps({"data": {"projectRoot": str(tmp_path)}})
+    replies = [
+        ({"jsonrpc": "2.0", "id": 1, "result": {}}, "session", ""),
+        ({"jsonrpc": "2.0", "id": 2, "result": {"contents": [{"text": project_info}]}}, "session", ""),
+        ({"jsonrpc": "2.0", "id": 3, "result": {"content": []}}, "session", ""),
+    ]
+    seen_timeouts = []
+
+    def post(_url, _payload, timeout, _session=None):
+        seen_timeouts.append(timeout)
+        return replies.pop(0)
+
+    spec = {
+        "kind": "mcp_tool", "name": "read_console", "arguments": {},
+        "identity_resource": "mcpforunity://project/info", "timeout_seconds": 5,
+    }
+    with patch("mcp_cocktail.doctor._post_mcp_jsonrpc", side_effect=post), \
+            patch("mcp_cocktail.doctor.urllib.request.urlopen"), \
+            patch("mcp_cocktail.doctor.time.monotonic", side_effect=[0, 0, 1, 2, 3]):
+        operational, _, _ = probe_mcp_target("http://localhost/mcp", spec, tmp_path)
+
+    assert operational is True
+    assert seen_timeouts == [5, 3, 2]
 
 
 def test_health_check_runs_even_when_the_precheck_cannot_find_the_binary():
@@ -52,11 +176,12 @@ def test_health_check_runs_even_when_the_precheck_cannot_find_the_binary():
     "runs in the shell, absent from PATH".
     """
     arm = ArmConfig(id="builtin", name="Builtin", type="cli",
-                    command="nonexistent_binary_xyz_123", health_check="exit 0")
+                    command="nonexistent_binary_xyz_123", health_check="exit 0",
+                    health_check_layer="target_operation")
     assert shutil.which("nonexistent_binary_xyz_123") is None
     res = probe_cli_arm(arm)
 
-    assert res.status == "READY", res.message
+    assert res.status == "OPERATIONAL", res.message
 
 
 def test_probe_mcp_arm_offline():
@@ -244,6 +369,38 @@ def test_arm_with_no_automatable_check_says_so_rather_than_failing():
     assert "WebSocket on 18711" in res.message
 
 
+def test_gui_arm_requires_external_check_without_claiming_ready_or_unconfigured():
+    arm = ArmConfig(
+        id="computer-use",
+        name="Computer Use",
+        type="gui",
+        probe="none",
+        probe_reason="The harness supplies computer use.",
+        install_hint="Enable computer use in the harness.",
+    )
+
+    res = doctor_check_arm(arm)
+
+    assert res.status == "EXTERNAL_CHECK_REQUIRED"
+    assert res.status not in READY_STATUSES
+    assert "agent harness" in res.message
+    assert "visible operation" in res.message
+    assert "The harness supplies computer use" in res.message
+
+
+def test_doctor_report_labels_gui_arm_as_external_check(capsys):
+    config = CocktailConfig(
+        name="gui",
+        description="",
+        arms=[ArmConfig(id="computer-use", name="Computer Use", type="gui", probe="none")],
+    )
+    print_doctor_report(run_doctor(config), config)
+
+    out = capsys.readouterr().out
+    assert "[EXTERNAL CHECK]" in out
+    assert "1 EXTERNAL_CHECK_REQUIRED" in out
+
+
 def test_plain_http_health_endpoint_is_not_asked_to_speak_mcp():
     """Not every URL worth checking is an MCP endpoint. AnkleBreaker's Unity
     bridge exposes a liveness ping, and demanding a JSON-RPC handshake of it
@@ -252,7 +409,7 @@ def test_plain_http_health_endpoint_is_not_asked_to_speak_mcp():
         arm = ArmConfig(id="bridge", name="Bridge", type="mcp", health_check=url, probe="http")
         res = probe_mcp_arm(arm)
 
-    assert res.status == "READY"
+    assert res.status == "TARGET_ONLY"
     assert "answered HTTP 200" in res.message
 
 
@@ -350,13 +507,13 @@ def ws_listener(behaviour: str):
         thread.join(timeout=2)
 
 
-def test_websocket_listener_answering_the_handshake_is_ready():
+def test_websocket_listener_answering_the_handshake_is_transport_only():
     with ws_listener("answer") as port:
         arm = ArmConfig(id="cg", name="CG", type="mcp",
                         health_check=f"ws://127.0.0.1:{port}", probe="websocket")
         res = probe_mcp_arm(arm)
 
-    assert res.status == "READY"
+    assert res.status == "TRANSPORT_ONLY"
     assert "501" in res.message
 
 
@@ -436,7 +593,7 @@ def test_discovery_probes_the_port_the_editor_actually_took(tmp_path: Path):
         _status_file(tmp_path, "unity-mcp-status-aaa.json", port, str(tmp_path))
         res = probe_mcp_arm(_discovering_arm(tmp_path), workspace_root=tmp_path)
 
-    assert res.status == "READY", res.message
+    assert res.status == "TRANSPORT_ONLY", res.message
     assert str(port) in res.message, "must report the discovered port, not the manifest's guess"
 
 
@@ -466,7 +623,7 @@ def test_domain_reload_is_not_reported_as_a_failure(tmp_path: Path):
     _status_file(tmp_path, "unity-mcp-status-ddd.json", 18711, str(tmp_path), reloading=True)
     res = probe_mcp_arm(_discovering_arm(tmp_path), workspace_root=tmp_path)
 
-    assert res.status == "ASSUMED_READY"
+    assert res.status == "TRANSPORT_ONLY"
     assert "domain-reload" in res.message
 
 
@@ -509,7 +666,9 @@ def test_evaluate_requirements():
     ]
 
     assert evaluate_requirements(results, []) == ([], [])
-    assert evaluate_requirements(results, ["up", "assumed"]) == ([], [])
+    unmet, unknown = evaluate_requirements(results, ["up", "assumed"])
+    assert [item.arm_id for item in unmet] == ["assumed"]
+    assert unknown == []
 
     unmet, unknown = evaluate_requirements(results, ["up", "down"])
     assert [r.arm_id for r in unmet] == ["down"]
@@ -520,8 +679,16 @@ def test_evaluate_requirements():
 
 
 def test_silent_success_still_counts_as_ready():
-    arm = ArmConfig(id="quiet", name="Quiet", type="cli", health_check="python -c \"pass\"")
-    assert probe_cli_arm(arm).status == "READY"
+    arm = ArmConfig(id="quiet", name="Quiet", type="cli", health_check="python -c \"pass\"",
+                    health_check_layer="target_operation")
+    assert probe_cli_arm(arm).status == "OPERATIONAL"
+
+
+def test_successful_generic_shell_check_is_transport_only_without_layer_declaration():
+    arm = ArmConfig(id="echo", name="Echo", type="cli", health_check="echo ok")
+    result = probe_cli_arm(arm)
+    assert result.status == "TRANSPORT_ONLY"
+    assert result.status not in READY_STATUSES
 
 
 def test_probe_binary_comes_from_the_health_check_not_the_arm_identity():
@@ -586,9 +753,9 @@ def test_probe_binary_honours_quoted_paths():
 
 def test_quoted_health_check_arm_probes_the_real_interpreter():
     arm = ArmConfig(id="quoted-hc", name="Quoted", type="cli", command="python",
-                    health_check=f'"{sys.executable}" -c "pass"')
+                    health_check=f'"{sys.executable}" -c "pass"', health_check_layer="target_operation")
     res = probe_cli_arm(arm)
-    assert res.status == "READY", res.message
+    assert res.status == "OPERATIONAL", res.message
 
 
 @contextlib.contextmanager
@@ -649,13 +816,13 @@ def test_http_200_from_a_non_mcp_server_is_not_ready():
     assert "did not complete an MCP handshake" in res.message
 
 
-def test_http_200_from_a_real_jsonrpc_endpoint_is_ready():
+def test_http_200_from_a_real_jsonrpc_endpoint_is_transport_only():
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2024-11-05"}}).encode()
     with local_server(body, content_type="application/json") as url:
         arm = ArmConfig(id="genuine", name="Genuine", type="mcp", health_check=url)
         res = probe_mcp_arm(arm)
 
-    assert res.status == "READY"
+    assert res.status == "TRANSPORT_ONLY"
 
 
 JSONRPC_OK = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2024-11-05"}}).encode()
@@ -673,8 +840,50 @@ def test_406_on_get_does_not_veto_a_server_that_speaks_mcp_on_post():
         arm = ArmConfig(id="coplay-mcp", name="Coplay", type="mcp", health_check=url)
         res = probe_mcp_arm(arm)
 
-    assert res.status == "READY"
+    assert res.status == "TRANSPORT_ONLY"
     assert "406" in res.message, "the GET status stays visible; it just stops being the verdict"
+
+
+def test_mcp_target_check_is_required_to_earn_operational():
+    with local_server(b"Not Acceptable", status=406, post_body=JSONRPC_OK, post_status=200) as url:
+        arm = ArmConfig(
+            id="coplay-mcp", name="Coplay", type="mcp", health_check=url,
+            target_check={"kind": "mcp_tool", "name": "read_console", "arguments": {"count": "1"}},
+        )
+        with patch("mcp_cocktail.doctor.probe_mcp_target", return_value=(True, "read_console completed", {})):
+            res = probe_mcp_arm(arm)
+    assert res.status == "OPERATIONAL"
+    assert "target are responsive" in res.message
+
+
+def test_mcp_target_timeout_is_degraded_despite_transport_handshake():
+    with local_server(b"Not Acceptable", status=406, post_body=JSONRPC_OK, post_status=200) as url:
+        arm = ArmConfig(
+            id="coplay-mcp", name="Coplay", type="mcp", health_check=url,
+            target_check={"kind": "mcp_tool", "name": "read_console"},
+        )
+        with patch("mcp_cocktail.doctor.probe_mcp_target", return_value=(False, "timed out", {})):
+            res = probe_mcp_arm(arm)
+    assert res.status == "DEGRADED"
+    assert "transport responds" in res.message
+
+
+def test_fixed_mcp_port_serving_another_project_is_wrong_project_not_degraded(tmp_path: Path):
+    with local_server(b"Not Acceptable", status=406, post_body=JSONRPC_OK, post_status=200) as url:
+        arm = ArmConfig(
+            id="coplay-mcp", name="Coplay", type="mcp", health_check=url,
+            target_check={"kind": "mcp_tool", "name": "read_console"},
+        )
+        evidence = {"project_roots": [r"C:\UnityProjects\another"]}
+        with patch(
+            "mcp_cocktail.doctor.probe_mcp_target",
+            return_value=(False, "identity mismatch", evidence),
+        ):
+            result = probe_mcp_arm(arm, tmp_path)
+
+    assert result.status == "WRONG_PROJECT"
+    assert "another Unity project" in result.message
+    assert result.details["project_roots"] == [r"C:\UnityProjects\another"]
 
 
 def test_406_with_no_handshake_is_still_bound_only():
@@ -781,6 +990,22 @@ def test_unity_preset_declares_a_binding_for_project_scoped_arms():
     arms = {a.id: a for a in CocktailConfig.load(PRESETS_DIR / "unity" / "manifest.json").arms}
     for arm_id in ("official-unity-cli", "official-unity-mcp"):
         assert arms[arm_id].binding_path == "data.instances[].project"
+    assert arms["coplay-mcp"].target_check["name"] == "read_console"
+    assert arms["coplay-mcp"].target_check["proves_capabilities"] == ["editor-automation"]
+
+
+def test_execution_reported_has_an_honest_status_label(capsys):
+    config = CocktailConfig(name="x", description="", arms=[])
+    result = ArmHealthResult(
+        "coplay", "Coplay", "EXECUTION_REPORTED",
+        "Capability succeeded (reported by an execution adapter).", {},
+    )
+
+    print_doctor_report([result], config)
+
+    output = capsys.readouterr().out
+    assert "[EXECUTION REPORTED]" in output
+    assert "[OFFLINE]" not in output
 
 
 def test_unreachable_arm_with_a_missing_setup_script_is_unconfigured(tmp_path):
@@ -841,7 +1066,7 @@ def test_run_doctor():
 
     results = run_doctor(cfg)
     assert len(results) == 2
-    assert results[0].status == "READY"
+    assert results[0].status == "INSTALLED_ONLY"
     assert results[1].status == "OFFLINE"
 
 
@@ -864,7 +1089,7 @@ def test_version_flag_does_not_earn_ready():
 def test_capability_check_is_what_earns_ready():
     arm = ArmConfig(id="proven", name="Proven", type="cli", command="python",
                     health_check="python --version", capability_check="python -c \"pass\"")
-    assert probe_cli_arm(arm).status == "READY"
+    assert probe_cli_arm(arm).status == "OPERATIONAL"
 
     failing = ArmConfig(id="unproven", name="Unproven", type="cli", command="python",
                         health_check="python --version",
@@ -920,6 +1145,33 @@ def test_arms_sharing_a_stack_on_purpose_are_not_a_collision():
         ],
     )
     assert shared_probe_binaries(config) == {}
+
+
+def test_mcp_arm_cannot_borrow_cli_target_health_as_delivery_proof():
+    arm = ArmConfig(
+        id="official-unity-mcp", name="Official MCP", type="mcp",
+        health_check="unity status --json", binding_path="data.instances[].project",
+    )
+    target = ArmHealthResult("official-unity-mcp", "Official MCP", "OPERATIONAL", "Editor answered.", {})
+    with patch("mcp_cocktail.doctor.probe_cli_arm", return_value=target):
+        result = probe_mcp_arm(arm, Path.cwd())
+    assert result.status == "TARGET_ONLY"
+    assert "MCP delivery route" in result.message
+    assert result.status not in READY_STATUSES
+
+
+def test_run_doctor_marks_shared_binary_rows_ambiguous():
+    config = CocktailConfig(
+        name="x", description="",
+        arms=[ArmConfig(id=n, name=n, type="cli", command="unity-cli",
+                        health_check="unity-cli --version") for n in ("a", "b")],
+    )
+    installed = {
+        n: ArmHealthResult(n, n, "INSTALLED_ONLY", "installed", {}) for n in ("a", "b")
+    }
+    with patch("mcp_cocktail.doctor.doctor_check_arm", side_effect=lambda arm, root: installed[arm.id]):
+        results = run_doctor(config)
+    assert [result.status for result in results] == ["AMBIGUOUS_IDENTITY", "AMBIGUOUS_IDENTITY"]
 
 
 def test_shipped_preset_does_not_flag_the_official_arms():

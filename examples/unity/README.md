@@ -1,6 +1,6 @@
 # Unity Ecosystem Benchmark & Guardrails (Reference Dataset)
 
-This directory contains a complete reference dataset for benchmarking the Unity agent tooling ecosystem — comparing the official `unity` CLI, the Official Unity Editor MCP server, and the community CoplayDev MCP server.
+This directory contains a reference dataset for benchmarking the Unity agent tooling ecosystem. The shipped preset now covers CLI, MCP, and computer-use GUI arms; this historical dataset primarily compares the official `unity` CLI, the Official Unity Editor MCP server, and the community CoplayDev MCP server.
 
 It holds the **evidence**. The **preset** those findings produced — the manifest, the rule store,
 and the helper scripts that `setup --preset unity` copies into a workspace — lives inside the
@@ -34,5 +34,7 @@ That copies `manifest.json` and `traps.json` into `.agents/`, provisions `tools/
 PreToolUse hook, and runs the doctor. Then:
 
 ```bash
-mcp-cocktail run T-001 "Build scene hierarchy" --exec auto
+mcp-cocktail plan T-001 "Build scene hierarchy"
 ```
+
+This writes a harness-neutral plan; it does not launch agents or mutate Unity.

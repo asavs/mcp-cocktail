@@ -9,12 +9,15 @@ from __future__ import annotations
 import glob
 import json
 import os
+import queue
 import re
 import shlex
 import shutil
 import socket
 import subprocess
 import sys
+import threading
+import time
 import urllib.parse
 import urllib.request
 from collections import Counter
@@ -25,6 +28,7 @@ from typing import Any
 
 from mcp_cocktail.config import CocktailConfig, ArmConfig
 from mcp_cocktail.console import ensure_utf8_streams
+from mcp_cocktail.evidence import append_operational_observation, latest_operational_observation
 
 
 @dataclass
@@ -32,10 +36,94 @@ class ArmHealthResult:
     arm_id: str
     arm_name: str
     # "READY", "ASSUMED_READY", "INSTALLED_ONLY", "NOT_RUNNING", "SOCKET_BOUND_ONLY",
-    # "BOUND_ELSEWHERE", "UNCONFIGURED", "OFFLINE"
+    # "BOUND_ELSEWHERE", "EXTERNAL_CHECK_REQUIRED", "UNCONFIGURED", "OFFLINE"
     status: str
     message: str
     details: dict[str, Any]
+
+
+OBSERVATION_FAILURE_TTL_SECONDS = 300
+OBSERVATION_CLOCK_SKEW_SECONDS = 5
+
+
+def record_health_observation(
+    workspace_root: Path,
+    result: ArmHealthResult,
+    *,
+    source: str = "doctor",
+    capability: str = "basic",
+    observed_at: float | None = None,
+) -> None:
+    """Atomically persist an arm observation for doctor and future runners.
+
+    Execution adapters can call this with ``source="execution"`` after a real
+    operation. Doctor intentionally does not erase that stronger evidence with
+    a shallower transport-only result.
+    """
+    previous = latest_operational_observation(workspace_root, result.arm_id, capability)
+    shallow = result.status in {
+        "TRANSPORT_ONLY", "TARGET_ONLY", "SOCKET_BOUND_ONLY", "INSTALLED_ONLY", "AMBIGUOUS_IDENTITY"
+    }
+    if source == "doctor" and shallow and previous and previous.get("operation") != "doctor":
+        return
+    outcome = (
+        "succeeded" if result.status in {"READY", "OPERATIONAL", "TRANSPORT_ONLY"}
+        else "timed_out" if result.details.get("timeout") else "failed"
+    )
+    append_operational_observation(workspace_root, {
+        "arm": result.arm_id,
+        "capability": capability,
+        "layer": "target_operation" if result.status in {"READY", "OPERATIONAL", "DEGRADED"} else "transport",
+        "operation": "doctor" if source == "doctor" else source,
+        "outcome": outcome,
+        "observed_at": datetime.fromtimestamp(
+            observed_at if observed_at is not None else time.time(), timezone.utc
+        ).isoformat().replace("+00:00", "Z"),
+        "classification": result.status,
+        "detail": result.message,
+        "project_identity": str(workspace_root),
+    })
+
+
+def apply_recent_health_observation(
+    result: ArmHealthResult,
+    workspace_root: Path,
+    *,
+    now: float | None = None,
+) -> ArmHealthResult:
+    """Let a recent real failure override a shallow successful handshake."""
+    # A later transport handshake must not erase a target failure. Recovery is
+    # established only by a newer target-operation observation.
+    observation = latest_operational_observation(
+        workspace_root, result.arm_id, layer="target_operation",
+        project_identity=str(workspace_root),
+        not_after=(now if now is not None else time.time()) + OBSERVATION_CLOCK_SKEW_SECONDS,
+    )
+    if not isinstance(observation, dict) or observation.get("operation") == "doctor":
+        return result
+    stamp = observation.get("observed_at", 0)
+    try:
+        observed = (
+            float(stamp) if isinstance(stamp, (int, float)) else
+            datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
+        )
+    except (TypeError, ValueError):
+        observed = 0
+    age = (now if now is not None else time.time()) - observed
+    failed = observation.get("outcome") in {"failed", "timed_out", "cancelled"}
+    shallow = result.status in {
+        "TRANSPORT_ONLY", "TARGET_ONLY", "SOCKET_BOUND_ONLY", "INSTALLED_ONLY", "AMBIGUOUS_IDENTITY"
+    }
+    if not failed or not shallow or age > OBSERVATION_FAILURE_TTL_SECONDS:
+        return result
+    return ArmHealthResult(
+        result.arm_id,
+        result.arm_name,
+        "DEGRADED",
+        f"Transport responds, but a target operation failed {max(0, int(age))}s ago: "
+        f"{observation.get('detail', 'operation failed')}",
+        {**result.details, "transport_status": result.status, "recent_observation": observation},
+    )
 
 
 def extract_json_path(data: Any, path: str) -> list[Any]:
@@ -289,7 +377,7 @@ def run_capability_check(arm: ArmConfig) -> ArmHealthResult | None:
         )
 
     return ArmHealthResult(
-        arm.id, arm.name, "READY",
+        arm.id, arm.name, "OPERATIONAL",
         f"Capability check '{arm.capability_check}' succeeded — this arm can do real work.",
         {"capability": True},
     )
@@ -351,8 +439,12 @@ def probe_cli_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHeal
                         {"stdout": res.stdout[:200]},
                     )
 
+                status = "OPERATIONAL" if arm.health_check_layer == "target_operation" else "TRANSPORT_ONLY"
+                if status == "TRANSPORT_ONLY":
+                    summary += " The manifest does not declare this check as a target operation."
                 return ArmHealthResult(
-                    arm.id, arm.name, "READY", summary, {"stdout": res.stdout[:200], "serving": serving}
+                    arm.id, arm.name, status, summary,
+                    {"stdout": res.stdout[:200], "serving": serving, "layer": arm.health_check_layer},
                 )
 
             # A health check that ran and failed is a verdict, not a missing
@@ -389,14 +481,20 @@ def probe_cli_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHeal
             # process's PATH says about it.
             located = f"found at {executable}" if executable else "resolved by the child shell"
             return ArmHealthResult(
-                arm.id, arm.name, "ASSUMED_READY", f"Executable '{cmd_name}' {located} (health check timed out).", {}
+                arm.id, arm.name, "DEGRADED",
+                f"Executable '{cmd_name}' {located}, but its health check timed out; no target operation was proven.",
+                {"timeout": True},
             )
         except Exception as e:
             return ArmHealthResult(
                 arm.id, arm.name, "UNCONFIGURED", f"Health check failed: {e}", {}
             )
 
-    return ArmHealthResult(arm.id, arm.name, "READY", f"Executable '{cmd_name}' found in PATH at {executable}.", {})
+    return ArmHealthResult(
+        arm.id, arm.name, "INSTALLED_ONLY",
+        f"Executable '{cmd_name}' found in PATH at {executable}, but no target health check is declared.",
+        {"executable": executable},
+    )
 
 
 def probe_http_health(url: str, timeout: int = 2) -> tuple[int | None, str]:
@@ -454,6 +552,197 @@ def speaks_mcp_over_http(url: str, timeout: int = 2) -> tuple[bool, str]:
         return True, "JSON-RPC initialize acknowledged"
 
     return False, "no JSON-RPC response to initialize"
+
+
+def _decode_jsonrpc_body(body: str, expected_id: Any = None) -> dict[str, Any] | None:
+    """Decode ordinary JSON or the matching response event in an SSE body.
+
+    MCP servers may emit progress/log notifications before the response.  A
+    notification proves neither completion nor success, so callers supplying a
+    request id must ignore every JSON-RPC object with a different or absent id.
+    """
+    candidates = [body]
+    candidates.extend(
+        line[5:].strip() for line in body.splitlines() if line.startswith("data:")
+    )
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+        except (TypeError, ValueError):
+            continue
+        if (
+            isinstance(value, dict)
+            and value.get("jsonrpc") == "2.0"
+            and (expected_id is None or value.get("id") == expected_id)
+        ):
+            return value
+    return None
+
+
+def _post_mcp_jsonrpc(
+    url: str,
+    payload: dict[str, Any],
+    timeout: float,
+    session_id: str | None = None,
+) -> tuple[dict[str, Any] | None, str | None, str]:
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "User-Agent": "mcp-cocktail-doctor",
+    }
+    if session_id:
+        headers["Mcp-Session-Id"] = session_id
+    request = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"), method="POST", headers=headers
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read(65536).decode("utf-8", errors="replace")
+            returned_session = response.headers.get("Mcp-Session-Id") or session_id
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read(4096).decode("utf-8", errors="replace")
+        except Exception:
+            body = ""
+        return None, session_id, f"HTTP {exc.code}: {body[:160] or exc.reason}"
+    except Exception as exc:
+        return None, session_id, str(exc)
+    decoded = _decode_jsonrpc_body(body, payload.get("id"))
+    if decoded is None:
+        return None, returned_session, "no JSON-RPC response"
+    return decoded, returned_session, ""
+
+
+def probe_mcp_target(
+    url: str, spec: dict[str, Any], workspace_root: Path | None = None
+) -> tuple[bool, str, dict[str, Any]]:
+    """Run a configured, bounded, read-only MCP operation through the target."""
+    if spec.get("kind") != "mcp_tool" or not isinstance(spec.get("name"), str):
+        return False, "target_check must declare kind=mcp_tool and a tool name", {}
+    try:
+        timeout = min(20.0, max(0.25, float(spec.get("timeout_seconds", 5))))
+    except (TypeError, ValueError):
+        timeout = 5.0
+    deadline = time.monotonic() + timeout
+
+    def remaining() -> float:
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise TimeoutError(f"target_check exceeded its {timeout:g}s total deadline")
+        return value
+    initialize = {
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05", "capabilities": {},
+            "clientInfo": {"name": "mcp-cocktail-doctor", "version": "1.0"},
+        },
+    }
+    try:
+        init, session_id, error = _post_mcp_jsonrpc(url, initialize, remaining())
+    except TimeoutError as exc:
+        return False, str(exc), {"timeout": True}
+    if init is None or "error" in init:
+        return False, f"initialize failed: {error or init.get('error')}", {}
+
+    # Streamable HTTP servers may allocate a session during initialize. The
+    # subsequent call must carry that opaque id. Sending initialized is not
+    # required by every implementation, but is required by MCP's lifecycle;
+    # its empty 202 response is intentionally not parsed as JSON-RPC.
+    notification = {
+        "jsonrpc": "2.0", "method": "notifications/initialized", "params": {}
+    }
+    try:
+        request = urllib.request.Request(
+            url, data=json.dumps(notification).encode("utf-8"), method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "User-Agent": "mcp-cocktail-doctor",
+                **({"Mcp-Session-Id": session_id} if session_id else {}),
+            },
+        )
+        with urllib.request.urlopen(request, timeout=remaining()):
+            pass
+    except urllib.error.HTTPError as exc:
+        if exc.code not in (200, 202, 204):
+            return False, f"initialized notification failed: HTTP {exc.code}", {}
+    except Exception as exc:
+        return False, f"initialized notification failed: {exc}", {}
+
+    identity_resource = spec.get("identity_resource")
+    if identity_resource:
+        if workspace_root is None:
+            return False, "target identity cannot be verified without a workspace root", {}
+        identity_call = {
+            "jsonrpc": "2.0", "id": 2, "method": "resources/read",
+            "params": {"uri": identity_resource},
+        }
+        try:
+            identity_reply, _, error = _post_mcp_jsonrpc(
+                url, identity_call, remaining(), session_id
+            )
+        except TimeoutError as exc:
+            return False, str(exc), {"timeout": True}
+        if identity_reply is None or "result" not in identity_reply:
+            return False, f"target identity resource failed: {error or identity_reply}", {}
+        def project_roots(value: Any) -> list[str]:
+            roots: list[str] = []
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if key.casefold() in {"projectroot", "project_root"} and isinstance(child, str):
+                        roots.append(child)
+                    else:
+                        roots.extend(project_roots(child))
+            elif isinstance(value, list):
+                for child in value:
+                    roots.extend(project_roots(child))
+            elif isinstance(value, str):
+                try:
+                    decoded = json.loads(value)
+                except (TypeError, ValueError):
+                    return roots
+                roots.extend(project_roots(decoded))
+            return roots
+
+        expected_identity = os.path.normcase(os.path.normpath(str(workspace_root.resolve())))
+        observed_roots = {
+            os.path.normcase(os.path.normpath(root))
+            for root in project_roots(identity_reply["result"])
+        }
+        if expected_identity not in observed_roots:
+            return False, (
+                f"target identity resource did not name this workspace ({workspace_root})"
+            ), {"identity_resource": identity_resource, "project_roots": sorted(observed_roots)}
+
+    call = {
+        "jsonrpc": "2.0", "id": 3 if identity_resource else 2, "method": "tools/call",
+        "params": {"name": spec["name"], "arguments": spec.get("arguments") or {}},
+    }
+    try:
+        reply, _, error = _post_mcp_jsonrpc(url, call, remaining(), session_id)
+    except TimeoutError as exc:
+        return False, str(exc), {"timeout": True}
+    if reply is None:
+        return False, f"target tool '{spec['name']}' failed: {error}", {}
+    if "error" in reply:
+        return False, f"target tool '{spec['name']}' returned {reply['error']}", {"reply": reply}
+    if "result" not in reply:
+        return False, f"target tool '{spec['name']}' returned no result", {"reply": reply}
+    result = reply.get("result")
+    if isinstance(result, dict) and result.get("isError") is True:
+        return False, f"target tool '{spec['name']}' reported an error", {"reply": reply}
+    reject_match = spec.get("reject_match")
+    if isinstance(reject_match, str) and reject_match:
+        rendered = json.dumps(result, ensure_ascii=False)
+        try:
+            rejected = re.search(reject_match, rendered, re.I) is not None
+        except re.error as exc:
+            return False, f"target_check reject_match is invalid: {exc}", {"reply": reply}
+        if rejected:
+            return False, (
+                f"target tool '{spec['name']}' returned a configured failure signal"
+            ), {"reply": reply, "reject_match": reject_match}
+    return True, f"target tool '{spec['name']}' completed", {"reply": reply, "session": bool(session_id)}
 
 
 LIVENESS_PATH = "/__mcp_liveness__"
@@ -515,10 +804,10 @@ def probe_websocket_listener(host: str, port: int, timeout: float = 2.0) -> tupl
                     "listening on that port, but it is not a WebSocket endpoint"
                 )
 
-            return "READY", f"WebSocket listener answered the handshake ({first})"
+            return "TRANSPORT_ONLY", f"WebSocket listener answered the handshake ({first})"
 
         # A clean close is still the accept loop doing its job.
-        return "READY", "WebSocket listener accepted and closed the probe cleanly"
+        return "TRANSPORT_ONLY", "WebSocket listener accepted and closed the probe cleanly"
 
     except ConnectionRefusedError:
         return "NOT_RUNNING", "nothing is listening on that port"
@@ -641,7 +930,7 @@ def probe_websocket_arm(arm: ArmConfig, url: str, workspace_root: Path | None = 
             # ignore this row.
             if instance.get(STATUS_FIELD_RELOADING):
                 return ArmHealthResult(
-                    arm.id, arm.name, "ASSUMED_READY",
+                    arm.id, arm.name, "TRANSPORT_ONLY",
                     f"{host}:{port} is mid domain-reload; the socket is legitimately down briefly.",
                     {"host": host, "port": port, "reloading": True},
                 )
@@ -673,6 +962,18 @@ def probe_stdio_mcp_arm(arm: ArmConfig) -> ArmHealthResult:
             arm.id, arm.name, "OFFLINE", f"Stdio MCP server binary '{target_cmd}' not found in PATH.", {}
         )
 
+    proc: subprocess.Popen[str] | None = None
+
+    def bounded_readline(stream: Any, timeout: float) -> str:
+        result: queue.Queue[str] = queue.Queue(maxsize=1)
+        threading.Thread(
+            target=lambda: result.put(stream.readline()), daemon=True
+        ).start()
+        try:
+            return result.get(timeout=timeout)
+        except queue.Empty as exc:
+            raise TimeoutError("stdio MCP response timed out") from exc
+
     try:
         proc = subprocess.Popen(
             [executable],
@@ -699,13 +1000,13 @@ def probe_stdio_mcp_arm(arm: ArmConfig) -> ArmHealthResult:
             proc.stdin.write(init_req + "\n")
             proc.stdin.flush()
 
-            resp_line = proc.stdout.readline()
+            resp_line = bounded_readline(proc.stdout, 3.0)
             if resp_line and "jsonrpc" in resp_line:
                 list_req = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
                 proc.stdin.write(list_req + "\n")
                 proc.stdin.flush()
 
-                list_line = proc.stdout.readline()
+                list_line = bounded_readline(proc.stdout, 3.0)
                 tool_count = 0
                 if list_line and "tools" in list_line:
                     try:
@@ -714,7 +1015,6 @@ def probe_stdio_mcp_arm(arm: ArmConfig) -> ArmHealthResult:
                     except Exception:
                         pass
 
-                proc.terminate()
                 # "advertised", not "available": a catalogue is not a
                 # capability. The Unity MCP advertises ~140 tools with no
                 # Editor running, and every one of them then blocks 60s.
@@ -726,18 +1026,31 @@ def probe_stdio_mcp_arm(arm: ArmConfig) -> ArmHealthResult:
                 return ArmHealthResult(
                     arm.id,
                     arm.name,
-                    "READY",
+                    "TRANSPORT_ONLY",
                     f"Stdio MCP server '{target_cmd}' active ({tool_msg}).",
                     {"tools_count": tool_count},
                 )
 
-        proc.terminate()
+    except TimeoutError:
+        return ArmHealthResult(
+            arm.id, arm.name, "DEGRADED",
+            f"Stdio MCP binary '{target_cmd}' started but did not answer within 3s.",
+            {"timeout": True},
+        )
     except Exception:
         pass
+    finally:
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=1)
 
     # Fallback when executable exists in PATH but stdio probe requires full launch args
     return ArmHealthResult(
-        arm.id, arm.name, "ASSUMED_READY", f"Stdio MCP binary '{target_cmd}' found in PATH at {executable}.", {}
+        arm.id, arm.name, "INSTALLED_ONLY", f"Stdio MCP binary '{target_cmd}' found in PATH at {executable}; no live target operation was proven.", {}
     )
 
 
@@ -768,9 +1081,9 @@ def probe_mcp_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHeal
         if arm.probe == "http":
             if status_code in (200, 204):
                 return ArmHealthResult(
-                    arm.id, arm.name, "READY",
-                    f"Health endpoint {url} answered HTTP {status_code}.",
-                    {"status": status_code},
+                    arm.id, arm.name, "TARGET_ONLY",
+                    f"Health endpoint {url} answered HTTP {status_code}; this proves target-side liveness, not a complete operation through the arm.",
+                    {"status": status_code, "evidence": "target-health-endpoint", "delivery": "unverified"},
                 )
             return ArmHealthResult(
                 arm.id, arm.name, "NOT_RUNNING",
@@ -788,10 +1101,34 @@ def probe_mcp_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHeal
         # to prevent. Ask the question the transport actually asks.
         is_mcp, detail = speaks_mcp_over_http(url)
         if is_mcp:
+            if arm.target_check:
+                operational, target_detail, target_evidence = probe_mcp_target(
+                    url, arm.target_check, workspace_root
+                )
+                if operational:
+                    return ArmHealthResult(
+                        arm.id, arm.name, "OPERATIONAL",
+                        f"MCP transport and target are responsive: {target_detail}.",
+                        {"status": status_code, "handshake": detail, **target_evidence},
+                    )
+                if target_evidence.get("project_roots"):
+                    return ArmHealthResult(
+                        arm.id, arm.name, "WRONG_PROJECT",
+                        f"MCP transport at {url} belongs to another Unity project: "
+                        f"{', '.join(target_evidence['project_roots'])}. Refusing to treat the "
+                        "fixed port as this workspace's arm.",
+                        {"status": status_code, "handshake": detail, **target_evidence},
+                    )
+                return ArmHealthResult(
+                    arm.id, arm.name, "DEGRADED",
+                    f"MCP transport responds at {url}, but the target probe failed: {target_detail}.",
+                    {"status": status_code, "handshake": detail, **target_evidence},
+                )
             return ArmHealthResult(
-                arm.id, arm.name, "READY",
-                f"MCP server reachable at {url} and {detail} (GET returned {status_code}).",
-                {"status": status_code, "handshake": detail},
+                arm.id, arm.name, "TRANSPORT_ONLY",
+                f"MCP server reachable at {url} and {detail} (GET returned {status_code}); "
+                "no target_check is declared, so Editor responsiveness is unproven.",
+                {"status": status_code, "handshake": detail, "evidence": "transport"},
             )
 
         if status_code in (401, 403):
@@ -823,7 +1160,15 @@ def probe_mcp_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHeal
 
     # 2. If health_check is a non-HTTP shell command (e.g. "unity status --json"), run command probe!
     if hc:
-        return probe_cli_arm(arm, workspace_root)
+        result = probe_cli_arm(arm, workspace_root)
+        if result.status in READY_STATUSES:
+            return ArmHealthResult(
+                arm.id, arm.name, "TARGET_ONLY",
+                f"{result.message} This verifies the shared target/backend path, not this "
+                "arm's MCP delivery route; an MCP round-trip is still required.",
+                {**result.details, "target_status": result.status, "delivery": "unverified"},
+            )
+        return result
 
     # 3. Default Stdio MCP probe
     return probe_stdio_mcp_arm(arm)
@@ -886,6 +1231,24 @@ def append_note(message: str, note: str) -> str:
 
 
 def doctor_check_arm(arm: ArmConfig, workspace_root: Path | None = None) -> ArmHealthResult:
+    # GUI automation lives in the agent harness, not at an endpoint Cocktail
+    # can interrogate. Calling it UNCONFIGURED implies a broken installation;
+    # calling it READY from a binary/socket would confuse harness availability
+    # with proof that the visible target application can complete an action.
+    if arm.type.lower() == "gui" and arm.probe == "none":
+        reason = f" {arm.probe_reason}" if arm.probe_reason else ""
+        return ArmHealthResult(
+            arm.id,
+            arm.name,
+            "EXTERNAL_CHECK_REQUIRED",
+            append_note(
+                "Not probed: GUI-arm availability must be established by the executing "
+                f"agent harness, then target responsiveness must be verified by a visible operation.{reason}",
+                acquisition_note(arm),
+            ),
+            {"probe": arm.probe, "availability": "external-harness"},
+        )
+
     # Probing an arm we cannot honestly probe manufactures a precise-sounding
     # failure about an endpoint that was never real: "unreachable at
     # 127.0.0.1:9500" reads as a server that is down, not as an entry nobody
@@ -975,16 +1338,139 @@ def shared_probe_binaries(config: CocktailConfig) -> dict[str, list[str]]:
 
 
 def run_doctor(config: CocktailConfig) -> list[ArmHealthResult]:
-    return [doctor_check_arm(arm, config.root_dir) for arm in config.arms]
+    results: list[ArmHealthResult] = []
+    for arm in config.arms:
+        result = doctor_check_arm(arm, config.root_dir)
+        result = apply_recent_health_observation(result, config.root_dir)
+        results.append(result)
+    return mark_ambiguous_identities(results, config)
 
 
-READY_STATUSES = ("READY", "ASSUMED_READY")
+def capability_health_results(
+    config: CocktailConfig,
+    base_results: list[ArmHealthResult],
+    capability: str,
+    *,
+    now: float | None = None,
+    freshness_seconds: int = OBSERVATION_FAILURE_TTL_SECONDS,
+) -> list[ArmHealthResult]:
+    """Derive capability-scoped status from fresh target-operation evidence."""
+    current = now if now is not None else time.time()
+    base = {result.arm_id: result for result in base_results}
+    currently_reachable = {"READY", "OPERATIONAL", "TRANSPORT_ONLY", "TARGET_ONLY"}
+    derived: list[ArmHealthResult] = []
+    for arm in config.arms:
+        if capability not in arm.capabilities:
+            continue
+        observation = latest_operational_observation(
+            config.root_dir, arm.id, capability, layer="target_operation",
+            project_identity=str(config.root_dir),
+            not_after=current + OBSERVATION_CLOCK_SKEW_SECONDS,
+        )
+        base_result = base.get(arm.id)
+        if base_result is None or base_result.status not in currently_reachable:
+            base_status = base_result.status if base_result else "UNKNOWN"
+            derived.append(ArmHealthResult(
+                arm.id, arm.name, base_status if base_result else "CAPABILITY_UNKNOWN",
+                f"Capability '{capability}' cannot be operational while current arm health "
+                f"is {base_status}.",
+                {"capability": capability, "base_status": base_status, "observation": observation},
+            ))
+            continue
+        # A target check is a live, project-bound operation performed by this
+        # very doctor invocation.  Let the manifest state exactly which
+        # capabilities that operation proves; do not infer every declared
+        # capability merely because one target call answered.  This keeps the
+        # capability gate useful without turning `read_console` into evidence
+        # that, for example, an arm can run EditMode tests.
+        live_probe_capabilities = arm.target_check.get("proves_capabilities", [])
+        if isinstance(live_probe_capabilities, str):
+            live_probe_capabilities = [live_probe_capabilities]
+        if base_result.status == "OPERATIONAL" and capability in live_probe_capabilities:
+            derived.append(ArmHealthResult(
+                arm.id, arm.name, "OPERATIONAL",
+                f"Capability '{capability}' is proven by the current live target probe.",
+                {
+                    "capability": capability,
+                    "base_status": base_result.status,
+                    "proof": "current_live_target_probe",
+                    "probe": base_result.details,
+                },
+            ))
+            continue
+        if not observation:
+            derived.append(ArmHealthResult(
+                arm.id, arm.name, "CAPABILITY_UNKNOWN",
+                f"No target-operation evidence exists for capability '{capability}'.",
+                {"capability": capability, "base_status": base.get(arm.id).status if arm.id in base else None},
+            ))
+            continue
+        stamp = observation.get("observed_at")
+        try:
+            observed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
+        except (TypeError, ValueError):
+            observed = 0.0
+        raw_age = int(current - observed)
+        age = max(0, raw_age)
+        fresh = -OBSERVATION_CLOCK_SKEW_SECONDS <= raw_age <= freshness_seconds
+        outcome = observation.get("outcome")
+        independently_probed = (
+            observation.get("operation") == "doctor"
+            and observation.get("classification") == "OPERATIONAL"
+        )
+        if outcome == "succeeded" and fresh:
+            status = "OPERATIONAL" if independently_probed else "EXECUTION_REPORTED"
+            proof = "independently probed" if independently_probed else "reported by an execution adapter"
+            message = f"Capability '{capability}' succeeded against this project {age}s ago ({proof})."
+        elif outcome in {"failed", "timed_out", "cancelled"} and fresh:
+            status = "DEGRADED"
+            message = f"Capability '{capability}' {outcome.replace('_', ' ')} {age}s ago: {observation.get('detail') or 'no detail'}"
+        else:
+            status = "CAPABILITY_UNKNOWN"
+            reason = "from the future" if raw_age < -OBSERVATION_CLOCK_SKEW_SECONDS else "stale"
+            message = f"Capability '{capability}' evidence is {reason} ({age}s old)."
+        derived.append(ArmHealthResult(
+            arm.id, arm.name, status, message,
+            {"capability": capability, "age_seconds": age, "observation": observation},
+        ))
+    return derived
+
+
+READY_STATUSES = ("READY", "OPERATIONAL")
 
 # Statuses asserting the binary answered something. A collision is about which
 # program owns a name on PATH, so it is just as real between three arms that
 # each got INSTALLED_ONLY as between three that got READY -- demoting them out
 # of the headline must not also silence the warning about them.
-RESPONDING_STATUSES = READY_STATUSES + ("INSTALLED_ONLY",)
+RESPONDING_STATUSES = READY_STATUSES + ("TRANSPORT_ONLY", "INSTALLED_ONLY")
+
+
+def mark_ambiguous_identities(
+    results: list[ArmHealthResult], config: CocktailConfig
+) -> list[ArmHealthResult]:
+    """Demote arms whose shared PATH name cannot identify their product."""
+    collisions = shared_probe_binaries(config)
+    ambiguous: set[str] = set()
+    binaries: dict[str, str] = {}
+    for binary, arm_ids in collisions.items():
+        responding = [
+            result for result in results
+            if result.arm_id in arm_ids and result.status in RESPONDING_STATUSES
+        ]
+        if len(responding) > 1:
+            ambiguous.update(result.arm_id for result in responding)
+            binaries.update({result.arm_id: binary for result in responding})
+
+    return [
+        ArmHealthResult(
+            result.arm_id, result.arm_name, "AMBIGUOUS_IDENTITY",
+            f"'{binaries[result.arm_id]}' answered, but multiple arm definitions claim that "
+            "PATH name; use an absolute executable path or identity check to disambiguate.",
+            {**result.details, "previous_status": result.status, "binary": binaries[result.arm_id]},
+        )
+        if result.arm_id in ambiguous else result
+        for result in results
+    ]
 
 
 def evaluate_requirements(
@@ -993,7 +1479,7 @@ def evaluate_requirements(
     """Check the arms a caller declared it depends on. Returns (unmet, unknown).
 
     Deliberately opt-in. A manifest is a survey of competing arms -- the Unity
-    preset lists eleven and nobody has all eleven -- so failing because "some
+    preset lists twelve and nobody has all twelve -- so failing because "some
     arm is down" would fail permanently for every real user, and a check that
     always fails gets tuned out. Callers name what they actually need.
     """
@@ -1031,11 +1517,20 @@ def print_doctor_report(results: list[ArmHealthResult], config: CocktailConfig) 
 
     labels = {
         "READY": "[READY]",
-        "ASSUMED_READY": "[ASSUMED_READY]",
+        "OPERATIONAL": "[OPERATIONAL]",
+        "TRANSPORT_ONLY": "[TRANSPORT ONLY]",
+        "TARGET_ONLY": "[DELIVERY UNVERIFIED]",
+        "DEGRADED": "[DEGRADED]",
+        "AMBIGUOUS_IDENTITY": "[AMBIGUOUS IDENTITY]",
+        "CAPABILITY_UNKNOWN": "[CAPABILITY UNKNOWN]",
+        "EXECUTION_REPORTED": "[EXECUTION REPORTED]",
+        "ASSUMED_READY": "[LEGACY ASSUMED]",
         "NOT_RUNNING": "[NOT_RUNNING]",
         "INSTALLED_ONLY": "[INSTALLED?]",
         "SOCKET_BOUND_ONLY": "[BOUND_ONLY (P4)]",
         "BOUND_ELSEWHERE": "[WRONG_PROJECT (P4)]",
+        "WRONG_PROJECT": "[WRONG_PROJECT (P4)]",
+        "EXTERNAL_CHECK_REQUIRED": "[EXTERNAL CHECK]",
         "UNCONFIGURED": "[UNCONFIGURED]",
         "OFFLINE": "[OFFLINE]",
     }

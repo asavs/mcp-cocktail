@@ -126,7 +126,18 @@ coplay_registered() {
 # A bound port is necessary but not sufficient — check the JSON-RPC endpoint answers.
 code="$(coplay_up)"
 if [ "$code" != "000" ] && [ -n "$code" ]; then
-  ok "server already answering at $COPLAY_URL/mcp (HTTP $code)"
+  # Port 8080 is machine-wide, while projects are not. Reusing an answering
+  # listener without proving its project can displace or drive an unrelated
+  # Editor. Doctor performs the initialized, exact-project resource check.
+  if (cd "$PROJECT" && mcp-cocktail doctor --require coplay-mcp >/dev/null 2>&1); then
+    ok "server already answering for this exact project at $COPLAY_URL/mcp (HTTP $code)"
+  else
+    bad "port 8080 is already occupied but is not operational for $PROJECT"
+    echo "        Refusing to reuse or replace a possibly unrelated project's bridge." >&2
+    echo "        Run from the target project: mcp-cocktail doctor" >&2
+    echo "        Deliberately stop/move the existing owner before retrying." >&2
+    exit 3
+  fi
 else
   if [ "$MODE" = "check" ]; then
     bad "server not answering at $COPLAY_URL/mcp"

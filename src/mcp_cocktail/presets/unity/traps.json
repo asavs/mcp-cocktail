@@ -67,6 +67,14 @@
       "read_only_ignore": true
     },
     {
+      "id": "coplay-bridge-start-blocking-deadlock",
+      "message": "P1 — Never block or await MCPForUnity Bridge.StartAsync() from `unity command eval`. Eval runs on Unity's main thread, and `.GetAwaiter().GetResult()`, `.Result`, `.Wait()`, or `await` prevents the continuation from running and permanently deadlocks the Editor. Dispatch it fire-and-forget: `var _ = MCPForUnity.Editor.Services.MCPServiceLocator.Bridge.StartAsync();`.",
+      "tool_matcher": "^(Bash|PowerShell)$",
+      "target_matcher": "Bridge\\.StartAsync\\s*\\(\\s*\\).*(?:GetAwaiter\\s*\\(\\s*\\)\\s*\\.GetResult\\s*\\(|\\.Result\\b|\\.Wait\\s*\\(|\\bawait\\b)|(?:GetAwaiter\\s*\\(\\s*\\)\\s*\\.GetResult\\s*\\(|\\.Result\\b|\\.Wait\\s*\\(|\\bawait\\b).*Bridge\\.StartAsync\\s*\\(\\s*\\)",
+      "cooldown_seconds": 0,
+      "read_only_ignore": true
+    },
+    {
       "id": "unity-mcp-no-editor-precondition",
       "message": "P1 — Check `unity status --json` before the first Editor-bound MCP call. Every Unity MCP server in this manifest advertises its full tool catalogue whether or not an Editor is running, so the presence of these tools is NOT evidence one exists. With `count: 0` the call blocks the full timeout (60s on the official arm, ~20s on coplay) and returns a timeout or `no_unity_session` without ever naming the missing precondition. The check costs ~200ms; the failure costs up to a minute per call. If no Editor is running, use the `unity` CLI instead.",
       "tool_matcher": "^mcp__(UnityMCP|ai-game-developer|mcp-unity|realvirtual-unity|unity|unity-editor-mcp)__.*$",
